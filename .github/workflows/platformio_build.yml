@@ -22,3 +22,13 @@ jobs:
 
       - name: Build PlatformIO Project
         run: pio run
+      - name: Upload normal esp32
+        uses: actions/upload-artifact@v4
+        with:
+          path: .pio/build/d1_mini/firmware.bin
+          name: firmware-esp32.bin
+      - name: Upload esp32c3
+        uses: actions/upload-artifact@v4
+        with:
+          path: .pio/build/mini_c3/firmware.bin
+          name: firmware-esp32c3.bin
