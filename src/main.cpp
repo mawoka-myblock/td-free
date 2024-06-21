@@ -1,4 +1,4 @@
-#include "Adafruit_TCS34725.h"
+#include "Adafruit_VEML7700.h"
 #include "SPI.h"
 #include <Wire.h>
 #include <Arduino.h>
@@ -6,18 +6,17 @@
 #include <DNSServer.h>
 #include <WebServer.h>
 // put function declarations here:
-Adafruit_TCS34725 tcs = Adafruit_TCS34725(TCS34725_INTEGRATIONTIME_300MS, TCS34725_GAIN_1X);
+Adafruit_VEML7700 veml = Adafruit_VEML7700();
 extern const uint8_t index_html_start[] asm("_binary_src_html_index_html_start");
 extern const uint8_t index_html_end[] asm("_binary_src_html_index_html_end");
 
 DNSServer dnsServer;
 WebServer server(80);
 
-float max_value;
-float max_clear_value;
+float baseline_reading;
 IPAddress apIP(192, 168, 0, 1);
 IPAddress netMsk(255, 255, 255, 0);
-float final_td_clear;
+float final_td;
 
 void replaceTemplateWithData(uint8_t *html, size_t htmlSize, const char *templateTag, float replacement)
 {
@@ -68,7 +67,7 @@ void handleRoot()
   uint8_t *html = new uint8_t[htmlSize + 1]; // +1 for null terminator
   memcpy(html, index_html_start, htmlSize + 1);
   const char *templateTag = "{{value}}";
-  float data = final_td_clear;
+  float data = final_td;
   replaceTemplateWithData(html, htmlSize, templateTag, data);
   server.send(200, "text/html", reinterpret_cast<const char *>(html));
   delete[] html;
@@ -87,7 +86,7 @@ void setup(void)
 
   WiFi.mode(WIFI_AP);
   WiFi.softAPConfig(apIP, apIP, netMsk);
-  WiFi.softAP("Td-Test");
+  WiFi.softAP("Td-Free");
   dnsServer.start(53, "*", apIP);
 
   // serve a simple root page
@@ -98,43 +97,35 @@ void setup(void)
   server.onNotFound(handleNotFound);
   server.begin();
 
-  float max_reading[4];
-  float max_clear[4];
-  size_t size = 16;
-  for (int i = 0; i < 4; i++)
-  {
-    uint16_t high_r, high_g, high_b, high_c;
-    tcs.getRawData(&high_r, &high_g, &high_b, &high_c);
-    max_reading[i] = (high_r + high_g + high_b + high_c);
-    max_clear[i] = high_c;
-    delay(500);
+
+  if (!veml.begin()) {
+    Serial.println("Sensor not found");
+    while (1);
   }
-  float sum = 0;
-  float sum_c = 0;
-  for (int i = 0; i < 4; ++i)
-  {
-    sum += max_reading[i];
-    sum_c += max_clear[i];
+
+  float max_reading = 0;
+  int sample_count = 10;
+  for (int i = 0; i < sample_count; i++) {
+    max_reading += veml.readLux();
+    delay(200);
   }
-  max_value = sum / 4;
-  max_clear_value = sum_c / 4;
+  baseline_reading = max_reading / sample_count;
   // Now we're ready to get readings!
 }
 
 void loop(void)
 {
   Serial.println("LOOP");
-  uint16_t r, g, b, c, colorTemp;
-  float red, green, blue;
 
-  tcs.getRawData(&r, &g, &b, &c);
-  tcs.getRGB(&red, &green, &blue);
-  float transmission = (r + g + b + c); // Adjust the combination method as needed
-  float td_percent = (transmission / max_value) * 100;
-  float final_td = 0.812 * td_percent - 0.834;
-  float clear_percent = c / max_clear_value;
+  float current_lux = veml.readLux();
+  
+  // Calculate the transmission percentage
+  if (baseline_reading != 0) {
+    final_td = (current_lux / baseline_reading) * 100.0;
+  } else {
+    final_td = 0; // Avoid division by zero
+  }
 
-  final_td_clear = 120.45848313466772 * clear_percent + 1.2720622896060854;
   dnsServer.processNextRequest();
   server.handleClient();
   delay(100);
