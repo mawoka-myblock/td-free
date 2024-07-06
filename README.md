@@ -38,7 +38,7 @@ But if you want a full featured one and have enough money to spend, feel free to
 - [COB LED Strip](https://s.click.aliexpress.com/e/_DDqwOPl) (`4000K Natural White`, `12v 528 leds`, any length) (**Choose the 528 LEDs!**)
 - [5,5x2,1mm round barrel jack](https://s.click.aliexpress.com/e/_DmneAx5)
 - [This VEML7700 board](https://de.aliexpress.com/item/1005004926993351.html)
-- [Supermini ESP32-C3](https://s.click.aliexpress.com/e/_DFmIcbN) (make sure to choose the board, not the expansion board!)
+- [Supermini ESP32-C3](https://de.aliexpress.com/item/1005005877531694.html) (make sure to choose the board, not the expansion board!)
 - [Mini360 Buck Step-Down](https://de.aliexpress.com/item/1005004872563696.html) (you can also use the one provided in the 24v-version,
   as this one only supports up to 23v.)
 
@@ -47,7 +47,7 @@ But if you want a full featured one and have enough money to spend, feel free to
 - [COB LED Strip](https://s.click.aliexpress.com/e/_DDqwOPl) (`4000K Natural White`, `24v 528 leds`, any length) (**Choose the 528 LEDs!**)
 - [5,5x2,1mm round barrel jack](https://s.click.aliexpress.com/e/_DmneAx5)
 - [This VEML7700 board](https://de.aliexpress.com/item/1005004926993351.html)
-- [Supermini ESP32-C3](https://s.click.aliexpress.com/e/_DFmIcbN) (make sure to choose the board, not the expansion board!)
+- [Supermini ESP32-C3](https://de.aliexpress.com/item/1005005877531694.html) (make sure to choose the board, not the expansion board!)
 - [Buck Step-Down converter](https://s.click.aliexpress.com/e/_DEgvDJD)
 
 ~ 6€ in parts cost (when only calculating per needed)
