@@ -22,7 +22,7 @@ The CAD is available in the [onshape workspace](https://cad.onshape.com/document
 | only for checking samples | **monitor td of spool as it's printing** |
 
 So, in summary, the Td-Free is **cheaper**, **open-source**[^1], **smaller** and **wifi-enabled**.
-But if you want a full featured one and have enough money to spend, feel free to buy the parts list and a license.
+But if you want a full featured one and have enough money to spend, feel free to buy the parts list and a license for a td-1.
 
 ## Requirements
 
@@ -75,8 +75,8 @@ At first, I'd recommend soldering all the components together.
 1. Download the latest build [here](https://nightly.link/mawoka-myblock/td-free/workflows/platformio_build/main/esp32c3-4mb.zip).
    They are directly built by GitHub.
 2. Extract the downloaded zip file.
-3. Install esp-tool.
-4. Flash the esp32: `esptool.py -b 230400 write_flash 0x0 firmware.bin`
+3. [Install esp-tool](https://docs.espressif.com/projects/esptool/en/latest/esp32/#quick-start).
+4. Flash the esp32: `esptool.py -b 230400 write_flash 0x0 td-free.bin`
 
 ## Usage
 
