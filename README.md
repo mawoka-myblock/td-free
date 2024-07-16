@@ -72,7 +72,7 @@ At first, I'd recommend soldering all the components together.
 
 ## Flashing instructions
 
-1. Download the latest build [here](https://nightly.link/mawoka-myblock/td-free/workflows/platformio_build/main/firmware-esp32c3.bin.zip).
+1. Download the latest build [here](https://nightly.link/mawoka-myblock/td-free/workflows/platformio_build/main/esp32c3-4mb.zip).
    They are directly built by GitHub.
 2. Extract the downloaded zip file.
 3. Install esp-tool.
