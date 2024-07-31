@@ -63,6 +63,7 @@ But if you want a full featured one and have enough money to spend, feel free to
 At first, I'd recommend soldering all the components together.
 
 - Solder the power connector to the step-down converter board (back one most likely positive)
+- **BEfORE YOU CONTINUE, SET THE STEP-DOWN CONVERTER TO 5V!!!** by turning the potentiometer and measuring the output voltage!
 - Solder the LED strip to the connector or the step-down converter input as well, so both get 24/12v.
 - Solder plus and minus output of the step-down converter to the ESP32 and to the VEML 7700 board.
 - Solder SDA to pin 8 on the ESP32 and SCL to pin 10 on the ESP.
