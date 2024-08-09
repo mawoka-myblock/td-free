@@ -24,7 +24,7 @@ jobs:
       - name: Build PlatformIO Project
         run: pio run
       - name: Combine into single file
-        run: esptool.py --chip esp32c3 merge_bin -o td-free.bin --flash_size 4MB 0x1000 .pio/build/mini_c3/bootloader.bin 0x8000 .pio/build/mini_c3/partitions.bin 0x10000 .pio/build/mini_c3/firmware.bin
+        run: esptool.py --chip esp32c3 merge_bin -o td-free.bin --flash_size 4MB 0x00000000 .pio/build/mini_c3/bootloader.bin 0x00008000 .pio/build/mini_c3/partitions.bin 0x00010000 .pio/build/mini_c3/firmware.bin
       - name: Upload esp32c3
         uses: actions/upload-artifact@v4
         with:
