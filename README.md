@@ -13,7 +13,6 @@ The CAD is available in the [onshape workspace](https://cad.onshape.com/document
 | **Cheap**                 | More expensive                           |
 | Only td, no color         | **Measures color and td**                |
 | Only diy                  | **Pre-builts and kits available**        |
-| Needs a power adapter     | **Runs off of USB**                      |
 | WiFi-enabled              | Only via usb and screen                  |
 | **Open-Source Code**      | Closed source                            |
 | **No license required**   | License needs to be purchased            |
