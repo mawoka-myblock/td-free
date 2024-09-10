@@ -32,8 +32,7 @@ But if you want a fully featured one and have enough money to spend, feel free t
 
 ## Shopping List
 
-- [COB LED Strip](https://s.click.aliexpress.com/e/_DlNXKdH) (`Cold white 10pcs`)
-- [5,5x2,1mm round barrel jack](https://s.click.aliexpress.com/e/_DmneAx5)
+- [COB LED Module](https://s.click.aliexpress.com/e/_DlNXKdH) (`Cold white 10pcs`)
 - [This VEML7700 board](https://de.aliexpress.com/item/1005004926993351.html)
 - [Supermini ESP32-C3](https://de.aliexpress.com/item/1005005877531694.html) (make sure to choose the board, not the expansion board!)
 
