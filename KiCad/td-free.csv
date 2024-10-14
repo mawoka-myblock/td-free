@@ -1,0 +1,7 @@
+"Id";"Designator";"Footprint";"Quantity";"Designation";"Supplier and ref";
+1;"J1";"PinHeader_1x02_P1.00mm_Horizontal";1;"Conn_01x02_Pin";;;
+2;"Q1";"SOT-23";1;"2N7002";;;
+3;"C1";"C_0603_1608Metric_Pad1.08x0.95mm_HandSolder";1;"C_Small";;;
+4;"U1";"MODULE_ESP32-C3_SUPERMINI";1;"ESP32-C3_SUPERMINI";;;
+5;"D1";"LED_WS2812B_PLCC4_5.0x5.0mm_P3.2mm";1;"WS2812B";;;
+6;"U2";"XDCR_VEML7700-TT";1;"VEML7700-TT";;;

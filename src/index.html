@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Td-Free</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f5f7fa;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+
+        .container {
+            background-color: #fff;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            border-radius: 10px;
+            padding: 20px;
+            width: 80%;
+            max-width: 600px;
+            min-height: 300px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        h1 {
+            text-align: center;
+            color: #333;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            background-color: #e0f7fa;
+            border-left: 4px solid #00796b;
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            color: #00796b;
+            word-wrap: break-word;
+        }
+
+        .timestamp {
+            font-size: 0.8em;
+            color: #666;
+            text-align: right;
+        }
+
+        .status {
+            text-align: center;
+            padding: 10px;
+            background-color: #fbe9e7;
+            color: #d32f2f;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+
+        .status.connected {
+            background-color: #e8f5e9;
+            color: #388e3c;
+        }
+
+        .wifi-link {
+            margin-top: auto;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        #content {
+            margin: auto;
+            font-size: 3rem;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>Td-Free</h1>
+        <div id="status" class="status">Connecting...</div>
+        <p id="content"></p>
+        <div style="display: flex;">
+            <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
+            <!-- <a href="/update" class="wifi-link" onclick="update_fw">Update Firmware</a> -->
+        </div>
+    </div>
+
+    <script>
+        // Replace this URL with your WebSocket server URL
+        const socket = new WebSocket(`ws://${window.location.hostname}/ws`);
+
+        const messagesContainer = document.getElementById("messages");
+        const statusContainer = document.getElementById("status");
+
+        let intervalId
+
+        const wifi_cfg = (e) => {
+            e.preventDefault()
+            socket.close()
+            window.location.assign("/wifi")
+        }
+        const update_fw = (e) => {
+            e.preventDefault()
+            socket.close()
+            window.location.assign("/update")
+        }
+
+        // When the connection is open
+        socket.addEventListener("open", () => {
+            statusContainer.textContent = "Connected to WebSocket server";
+            statusContainer.classList.add("connected");
+
+            if (intervalId) {
+                clearInterval(intervalId); // Clear any existing interval
+            }
+            intervalId = setInterval(() => {
+                if (socket.readyState === WebSocket.OPEN) {
+                    socket.send("p");
+                    console.log("Sent: p");
+                }
+            }, 1000);
+
+
+        });
+
+        // When a message is received
+        socket.addEventListener("message", (event) => {
+            const el = document.getElementById("content")
+            if (event.data === "no_filament") {
+                el.innerText = "No filament inserted! Insert some"
+            } else {
+                const num = parseFloat(event.data)
+                if (isNaN(num)) {
+                    el.innerText = "An error occured!"
+                    return
+                }
+                el.innerText = num.toFixed(2)
+            }
+        });
+
+        // When the connection is closed or there's an error
+        socket.addEventListener("close", () => {
+            statusContainer.textContent = "Disconnected from WebSocket server";
+            statusContainer.classList.remove("connected");
+            clearInterval(intervalId)
+
+        });
+
+        socket.addEventListener("error", () => {
+            statusContainer.textContent = "Error connecting to WebSocket server";
+            statusContainer.classList.remove("connected");
+            clearInterval(intervalId)
+        });
+
+        window.addEventListener("beforeunload", () => {
+            socket.close()
+        })
+    </script>
+</body>
+
+</html>

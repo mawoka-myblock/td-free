@@ -1,0 +1,69 @@
+[package]
+name = "td-free-rs"
+version = "0.1.0"
+authors = ["Mawoka <git@mawoka.eu>"]
+edition = "2021"
+resolver = "2"
+rust-version = "1.77"
+
+[[bin]]
+name = "td-free-rs"
+harness = false     # do not use the built in cargo test harness -> resolve rust-analyzer errors
+
+[profile.release]
+opt-level = "s"
+codegen-units = 1
+panic = "abort"
+lto = true
+strip = true
+
+[profile.dev]
+debug = true    # Symbols are nice and they don't increase the size on Flash
+opt-level = "z"
+
+[features]
+ota = ["dep:esp-ota"]
+default = ["std", "esp-idf-svc/native"]
+#critical-section-impl = ["critical-section/restore-state-none"]
+
+pio = ["esp-idf-svc/pio"]
+std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
+alloc = ["esp-idf-svc/alloc"]
+nightly = ["esp-idf-svc/nightly"]
+experimental = ["esp-idf-svc/experimental"]
+embassy = [
+    "esp-idf-svc/embassy-sync",
+    "esp-idf-svc/critical-section",
+    "esp-idf-svc/embassy-time-driver",
+]
+
+[dependencies]
+log = { version = "0.4", default-features = false }
+esp-idf-svc = { version = "0.49", default-features = false, features= ["experimental"] }
+embedded-hal = "1"
+heapless = "0.8"
+
+
+anyhow = "1"
+url = "2.5"
+esp-ota = { git= "https://github.com/KevinBeckers/esp-ota.git", rev = "d6b572f1df6b68135666d6802f8c9b273ef03f17", optional = true}
+
+
+veml7700 = "0.2.0"
+ws2812-esp32-rmt-driver = { version = "0.9", features = ["smart-leds-trait"] }
+smart-leds = "0.4"
+#smol = { version = "2" }
+#embedded-svc = "0.28"
+
+#edge-captive = { version = "0.3", features = ["std", "io"] }
+#edge-nal-std = "0.3"
+#async-io-mini = "0.2"
+
+
+[build-dependencies]
+embuild = "0.32.0"
+vergen-gix = { version = "1", features = ["build", "rustc"] }
+anyhow = "1"
+
+# [package.metadata.espflash]
+# partition_table = "partitions.csv"
