@@ -42,7 +42,7 @@ You have to use black filament for the specifc parts marked as such, but for the
 7. Done! Measure your Td!
 
 ### From Scratch
-Get the PCB from a manufacturerlike JLCPCB, PCBway or whatever. Now, you'll also want to get the following components:
+Get the PCB from a manufacturer like JLCPCB, PCBway or whatever. Now, you'll also want to get the following components:
 - `VEML7700` (TR or TT is only about the packaging, so choose the cheaper one)
 - `WS2812B` (In the 5050 variant)
 - `ESP32-C3 Supermini` ([Here from AliExpress](https://s.click.aliexpress.com/e/_DmNdnTB))
