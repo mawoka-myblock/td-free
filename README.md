@@ -43,8 +43,8 @@ You have to use black filament for the specifc parts marked as such, but for the
 
 ### From Scratch
 Get the PCB from a manufacturerlike JLCPCB, PCBway or whatever. Now, you'll also want to get the following components:
-- `VEML7700`
-- `WS2812B`
+- `VEML7700` (TR or TT is only about the packaging, so choose the cheaper one)
+- `WS2812B` (In the 5050 variant)
 - `ESP32-C3 Supermini` ([Here from AliExpress](https://s.click.aliexpress.com/e/_DmNdnTB))
 - `AOSS32334C`
 - [This LED module](https://s.click.aliexpress.com/e/_DF3Gdpb) Get the Cold White version
