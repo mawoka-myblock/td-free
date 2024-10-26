@@ -5,10 +5,10 @@ fn main() -> Result<()> {
     let gitcl = GixBuilder::all_git()?;
     let rustc = RustcBuilder::all_rustc()?;
     Emitter::default()
-    .add_instructions(&build)?
-    .add_instructions(&gitcl)?
-    .add_instructions(&rustc)?
-    .emit()?;
+        .add_instructions(&build)?
+        .add_instructions(&gitcl)?
+        .add_instructions(&rustc)?
+        .emit()?;
     embuild::espidf::sysenv::output();
     Ok(())
 }

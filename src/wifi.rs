@@ -1,5 +1,8 @@
 use core::str;
-use std::{str::FromStr, sync::{Arc, Mutex}};
+use std::{
+    str::FromStr,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::bail;
 use esp_idf_svc::{
@@ -91,7 +94,7 @@ pub async fn wifi_setup(
     wifi: &mut AsyncWifi<EspWifi<'static>>,
     nvs: EspNvsPartition<NvsDefault>,
     led: Arc<Mutex<LedType<'_>>>,
-    wifi_status: Arc<Mutex<WifiEnum>>
+    wifi_status: Arc<Mutex<WifiEnum>>,
 ) -> anyhow::Result<WifiEnum> {
     let nvs = match EspNvs::new(nvs, "wifi", true) {
         Ok(nvs) => nvs,
@@ -148,7 +151,7 @@ pub fn save_wifi_creds(
     Ok(())
 }
 
-pub fn get_wifi_ssid(nvs: EspNvsPartition<NvsDefault>)-> Option<String> {
+pub fn get_wifi_ssid(nvs: EspNvsPartition<NvsDefault>) -> Option<String> {
     let nvs = match EspNvs::new(nvs, "wifi", true) {
         Ok(nvs) => nvs,
         Err(_) => {
@@ -157,7 +160,9 @@ pub fn get_wifi_ssid(nvs: EspNvsPartition<NvsDefault>)-> Option<String> {
         }
     };
     let mut wifi_ssid_buffer = vec![0; 256];
-    nvs.get_str("ssid", &mut wifi_ssid_buffer).unwrap().map(|s| s.to_string())
+    nvs.get_str("ssid", &mut wifi_ssid_buffer)
+        .unwrap()
+        .map(|s| s.to_string())
 }
 
 async fn wifi_hotspot(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<()> {

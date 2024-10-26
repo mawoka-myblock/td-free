@@ -1,5 +1,6 @@
 #![feature(iter_intersperse)]
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use core::time::Duration;
@@ -38,6 +39,7 @@ use esp_idf_svc::http::server::ws::EspHttpWsConnection;
 use esp_idf_svc::sys::EspError;
 use ws2812_esp32_rmt_driver::{driver::color::LedPixelColorGrb24, LedPixelEsp32Rmt, RGB8};
 // mod dns;
+mod helpers;
 mod led;
 mod wifi;
 
@@ -149,6 +151,7 @@ fn main() -> Result<(), ()> {
 
     let mut server = EspHttpServer::new(&server_configuration).unwrap();
     let cloned_nvs = Arc::new(nvs.clone());
+    let cloned_nvs_for_algo = Arc::new(nvs.clone());
 
     server
         .fn_handler("/", Method::Get, |req| {
@@ -166,7 +169,7 @@ fn main() -> Result<(), ()> {
             let password = url_params.get("password");
             if ssid.is_none() && password.is_none() {
                 let saved_ssid =
-                    wifi::get_wifi_ssid(cloned_nvs.as_ref().clone()).unwrap_or_default();
+                    wifi::get_wifi_ssid(cloned_nvs.clone().as_ref().clone()).unwrap_or_default();
                 req.into_ok_response()?
                     .write_all(serve_wifi_setup_page(&saved_ssid, "").as_ref())
                     .map(|_| ())?;
@@ -187,7 +190,7 @@ fn main() -> Result<(), ()> {
             match wifi::save_wifi_creds(
                 ssid.unwrap(),
                 password.unwrap(),
-                cloned_nvs.as_ref().clone(),
+                cloned_nvs.clone().as_ref().clone(),
             ) {
                 Ok(_) => {
                     req.into_ok_response()?
@@ -219,6 +222,51 @@ fn main() -> Result<(), ()> {
             };
         })
         .unwrap();
+    server
+        .fn_handler::<anyhow::Error, _>("/algorithm", Method::Get, move |req| {
+            let url = Url::parse(&format!("http://google.com{}", req.uri())).unwrap();
+            let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
+            let m_value = url_params.get("m");
+            let b_value = url_params.get("b");
+            if m_value.is_none() && b_value.is_none() {
+                let saved_algorithm =
+                    helpers::get_saved_algorithm_variables(cloned_nvs_for_algo.as_ref().clone());
+                req.into_ok_response()?
+                    .write_all(serve_algo_setup_page(saved_algorithm.0, saved_algorithm.1).as_ref())
+                    .map(|_| ())?;
+                return Ok(());
+            }
+            let mod_b_value = b_value
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Owned("0.0".to_string()));
+            let mod_m_value = m_value
+                .map(Cow::Borrowed)
+                .unwrap_or_else(|| Cow::Owned("1.0".to_string()));
+            match helpers::save_algorithm_variables(
+                &mod_b_value,
+                &mod_m_value,
+                cloned_nvs_for_algo.as_ref().clone(),
+            ) {
+                Ok(_) => {
+                    req.into_ok_response()?
+                        .write_all(
+                            serve_algo_setup_page(
+                                mod_b_value.parse::<f32>().unwrap_or(0.0),
+                                mod_m_value.parse::<f32>().unwrap_or(1.0),
+                            )
+                            .as_ref(),
+                        )
+                        .map(|_| ())?;
+                    return Ok(());
+                }
+                Err(e) => {
+                    error!("{:?}", e);
+                    FreeRtos.delay_ms(50);
+                    reset::restart();
+                }
+            };
+        })
+        .unwrap();
 
     #[cfg(feature = "ota")]
     server
@@ -241,9 +289,12 @@ fn main() -> Result<(), ()> {
         })
         .unwrap();
 
+    let cloned_nvs_for_ws = Arc::new(nvs.clone());
     server
         .ws_handler("/ws", move |ws: &mut EspHttpWsConnection| {
             let mut last_sent = Instant::now();
+            let saved_algorithm =
+                helpers::get_saved_algorithm_variables(cloned_nvs_for_ws.as_ref().clone());
 
             loop {
                 if ws.is_closed() {
@@ -271,7 +322,8 @@ fn main() -> Result<(), ()> {
                         FreeRtos.delay_ms(2);
                         let reading = veml.lock().unwrap().read_lux().unwrap();
                         let td_value = (reading / baseline_reading) * 100.0;
-                        ws_message = td_value.to_string();
+                        let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
+                        ws_message = adjusted_td_value.to_string();
                         led_light.lock().unwrap().set_duty(25).unwrap();
                         log::info!("Reading: {}", td_value);
                     }
@@ -299,6 +351,14 @@ fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
         include_str!("wifi_setup.html"),
         ssid = current_ssid,
         error = error
+    )
+}
+
+fn serve_algo_setup_page(b_val: f32, m_val: f32) -> String {
+    format!(
+        include_str!("algorithm_setup.html"),
+        b_val = b_val,
+        m_val = m_val
     )
 }
 /*
