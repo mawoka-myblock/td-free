@@ -3,7 +3,7 @@ name: CI
 on:
   release:
     types:
-      - published
+      - created
     
 env:
   rust_toolchain: stable
