@@ -59,7 +59,7 @@ jobs:
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
-        run: cargo binstall espflash
+        run: cargo binstall espflash --no-confirm
 
       # - name: Setup | ldproxy
       #   run: cargo install ldproxy   
