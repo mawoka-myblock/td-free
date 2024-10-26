@@ -1,0 +1,89 @@
+name: CI
+
+on:
+  release:
+    types:
+      - published
+    
+env:
+  rust_toolchain: stable
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - xtensa-esp32s3-espidf
+        idf-version:
+          - release/v5.0
+
+    steps:
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+
+        
+      - name: Extract version from tag
+        id: extract_version
+        run: |
+          # Remove the "v" prefix if present
+          VERSION="${GITHUB_REF#refs/tags/v}"
+          echo "version=$VERSION" >> $GITHUB_ENV
+
+      - name: Update version in Cargo.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        env:
+          VERSION: ${{ env.version }}
+
+      - name: Commit updated Cargo.toml
+        run: |
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -am "Set version to $VERSION for release"
+          git push
+
+      # fixes missing libclang error
+      - name: Setup | libncurses5
+        run: sudo apt-get install libncurses5
+
+      - name: Setup | Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ env.rust_toolchain }}
+          components: rustfmt, clippy
+
+      - name: Setup | Std
+        run: rustup component add rust-src --toolchain ${{ env.rust_toolchain }}-x86_64-unknown-linux-gnu
+
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Rust for Xtensa
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          version: "latest"
+          ldproxy: true
+      - name: Install Cargo-Binstall
+        uses: cargo-bins/cargo-binstall@main
+      - name: Install ESPflash
+        run: cargo binstall espflash
+
+      # - name: Setup | ldproxy
+      #   run: cargo install ldproxy   
+      - name: Build | Compile (production)
+        run: cargo build --release
+
+      - name: Merge Binary
+        run: espflash save-image --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          files: td-free.bin
+      
+
+      
