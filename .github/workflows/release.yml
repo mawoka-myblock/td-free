@@ -8,17 +8,13 @@ on:
 env:
   rust_toolchain: stable
 
+permissions:
+  contents: write
+
 jobs:
   compile:
     name: Compile
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - xtensa-esp32s3-espidf
-        idf-version:
-          - release/v5.0
 
     steps:
       - name: Setup | Checkout
@@ -43,7 +39,7 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git commit -am "Set version to $VERSION for release"
-          git push origin HEAD:${{ github.ref_name }}
+          git push
 
       # fixes missing libclang error
       - name: Setup | libncurses5
