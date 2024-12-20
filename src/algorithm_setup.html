@@ -82,10 +82,10 @@
             <b>b</b> By adjusting these values, you can alter your measured Td.</p>
         <form method="get">
             <label for="m">m-value (1)</label>
-            <input type="number" id="m" name="m" placeholder="1" value="{m_val}" required>
+            <input type="text" id="m" name="m" placeholder="1" value="{m_val}" required pattern="\d{{1,2}}[\,,\.]\d{{1,2}}">
 
             <label for="b">b-value (0)</label>
-            <input type="number" id="b" name="b" placeholder="0" value="{b_val}" required>
+            <input type="text" id="b" name="b" placeholder="0" value="{b_val}" required pattern="\d{{1,2}}[\,,\.]\d{{1,2}}">
 
             <button type="submit" class="btn">Save</button>
         </form>
