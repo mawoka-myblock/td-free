@@ -64,6 +64,7 @@ smart-leds = "0.4"
 embuild = "0.32.0"
 vergen-gix = { version = "1", features = ["build", "rustc"] }
 anyhow = "1"
+cc = "=1.1.20"
 
 # [package.metadata.espflash]
 # partition_table = "partitions.csv"
