@@ -21,6 +21,7 @@ async fn wifi_client(
     pass: &str,
     wifi: &mut AsyncWifi<EspWifi<'static>>,
 ) -> anyhow::Result<()> {
+    // let mut mdns = EspMdns::take();
     let mut auth_method = AuthMethod::WPA2Personal;
     if ssid.is_empty() {
         bail!("Missing WiFi name")
@@ -37,6 +38,7 @@ async fn wifi_client(
     wifi.start().await?;
 
     info!("Scanning...");
+    let mut mdns = esp_idf_svc::mdns::EspMdns::take().unwrap();
 
     let ap_infos = wifi.scan().await?;
 

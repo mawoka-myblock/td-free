@@ -65,6 +65,8 @@ jobs:
       #   run: cargo install ldproxy   
       - name: Build | Compile (production)
         run: cargo build --release
+        env:
+          VERSION: ${{ env.version }}
 
       - name: Merge Binary
         run: espflash save-image --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin

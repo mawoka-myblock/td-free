@@ -156,7 +156,7 @@ fn main() -> Result<(), ()> {
     server
         .fn_handler("/", Method::Get, |req| {
             req.into_ok_response()?
-                .write_all(INDEX_HTML.as_bytes())
+                .write_all(INDEX_HTML.replace("VERSION_ID", option_env!("VERSION").unwrap_or("UNKNOWN")).as_bytes())
                 .map(|_| ())
         })
         .unwrap();
