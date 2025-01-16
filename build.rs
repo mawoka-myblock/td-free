@@ -11,8 +11,8 @@ fn main() -> Result<()> {
         .emit()?;
     embuild::espidf::sysenv::output();
     println!(
-        "cargo:rustc-env=VERSION={}",
-        std::env::var("TD_FREE_VERSION").unwrap_or("UNKNOWN".to_string())
+        "cargo:rustc-env=TD_FREE_VERSION={}",
+        std::env::var("VERSION").unwrap_or("UNKNOWN".to_string())
     );
     Ok(())
 }
