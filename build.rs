@@ -10,5 +10,9 @@ fn main() -> Result<()> {
         .add_instructions(&rustc)?
         .emit()?;
     embuild::espidf::sysenv::output();
+    println!(
+        "cargo:rustc-env=VERSION={}",
+        std::env::var("TD_FREE_VERSION").unwrap_or("UNKNOWN".to_string())
+    );
     Ok(())
 }
