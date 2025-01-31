@@ -1,14 +1,10 @@
 #![feature(iter_intersperse)]
 
-use std::borrow::Cow;
-use std::collections::HashMap;
-
 use core::time::Duration;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
-use esp_idf_svc::hal::reset;
 use esp_idf_svc::hal::task::block_on;
 use esp_idf_svc::http::server::EspHttpServer;
 use esp_idf_svc::http::Method;
@@ -17,7 +13,6 @@ use esp_idf_svc::io::{vfs, Write};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
-use esp_idf_svc::ws::FrameType;
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{
@@ -27,20 +22,16 @@ use esp_idf_svc::{
         prelude::*,
     },
 };
-use led::set_led;
-use log::error;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
-use url::Url;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
 // use wifi::get;
 use esp_idf_svc::http::server::ws::EspHttpWsConnection;
-use esp_idf_svc::sys::EspError;
 use ws2812_esp32_rmt_driver::{driver::color::LedPixelColorGrb24, LedPixelEsp32Rmt, RGB8};
 // mod dns;
 mod helpers;
 mod led;
+mod routes;
 mod wifi;
 
 static INDEX_HTML: &str = include_str!("index.html");
@@ -83,7 +74,7 @@ fn main() -> Result<(), ()> {
         &TimerConfig::default().frequency(110.Hz().into()),
     )
     .unwrap();
-    let led_light = Arc::new(Mutex::new(
+    let led_light: Arc<Mutex<LedcDriver<'_>>> = Arc::new(Mutex::new(
         LedcDriver::new(
             peripherals.ledc.channel1,
             light_timer_driver,
@@ -93,7 +84,15 @@ fn main() -> Result<(), ()> {
     ));
 
     let rgb_led_channel = peripherals.rmt.channel0;
-    let ws2812 = Arc::new(Mutex::new(
+    let ws2812: Arc<
+        Mutex<
+            LedPixelEsp32Rmt<
+                '_,
+                smart_leds::RGB<u8>,
+                ws2812_esp32_rmt_driver::driver::color::LedPixelColorImpl<3, 1, 0, 2, 255>,
+            >,
+        >,
+    > = Arc::new(Mutex::new(
         LedType::new(rgb_led_channel, rgb_led_pin).unwrap(),
     ));
     let pixels = std::iter::repeat(RGB8::new(255, 255, 0)).take(1);
@@ -113,7 +112,7 @@ fn main() -> Result<(), ()> {
     let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
-    let veml = Arc::new(Mutex::new(Veml7700::new(i2c)));
+    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
     led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
     FreeRtos.delay_ms(500);
     match veml.lock().unwrap().enable() {
@@ -126,7 +125,7 @@ fn main() -> Result<(), ()> {
     FreeRtos.delay_ms(200);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
     log::info!("Baseline readings completed");
-    let wifi_status = Arc::new(Mutex::new(WifiEnum::Working));
+    let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
     block_on(wifi::wifi_setup(
         &mut wifi,
@@ -170,108 +169,12 @@ fn main() -> Result<(), ()> {
 
     server
         .fn_handler::<anyhow::Error, _>("/wifi", Method::Get, move |req| {
-            let url = Url::parse(&format!("http://google.com{}", req.uri())).unwrap();
-            let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
-            let ssid = url_params.get("ssid");
-            let password = url_params.get("password");
-            if ssid.is_none() && password.is_none() {
-                let saved_ssid =
-                    wifi::get_wifi_ssid(cloned_nvs.clone().as_ref().clone()).unwrap_or_default();
-                req.into_ok_response()?
-                    .write_all(serve_wifi_setup_page(&saved_ssid, "").as_ref())
-                    .map(|_| ())?;
-                return Ok(());
-            }
-            if ssid.is_none() {
-                req.into_ok_response()?
-                    .write_all(serve_wifi_setup_page("", "SSID is not set").as_ref())
-                    .map(|_| ())?;
-                return Ok(());
-            }
-            if password.is_none() {
-                req.into_ok_response()?
-                    .write_all(serve_wifi_setup_page(ssid.unwrap(), "Password is not set").as_ref())
-                    .map(|_| ())?;
-                return Ok(());
-            }
-            match wifi::save_wifi_creds(
-                ssid.unwrap(),
-                password.unwrap(),
-                cloned_nvs.clone().as_ref().clone(),
-            ) {
-                Ok(_) => {
-                    req.into_ok_response()?
-                        .write_all(
-                            serve_wifi_setup_page(
-                                ssid.unwrap_or(&String::new()),
-                                "Saved successfully, resetting now",
-                            )
-                            .as_ref(),
-                        )
-                        .map(|_| ())?;
-                    FreeRtos.delay_ms(50);
-                    reset::restart();
-                }
-                Err(e) => {
-                    req.into_ok_response()?
-                        .write_all(
-                            serve_wifi_setup_page(
-                                ssid.unwrap_or(&String::new()),
-                                "COULD NOT SAVE WIFI CREDENTIALS, resetting now",
-                            )
-                            .as_ref(),
-                        )
-                        .map(|_| ())?;
-                    error!("{:?}", e);
-                    FreeRtos.delay_ms(50);
-                    reset::restart();
-                }
-            };
+            routes::wifi_route(req, cloned_nvs.clone())
         })
         .unwrap();
     server
         .fn_handler::<anyhow::Error, _>("/algorithm", Method::Get, move |req| {
-            let url = Url::parse(&format!("http://google.com{}", req.uri())).unwrap();
-            let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
-            let m_value = url_params.get("m");
-            let b_value = url_params.get("b");
-            if m_value.is_none() && b_value.is_none() {
-                let saved_algorithm =
-                    helpers::get_saved_algorithm_variables(cloned_nvs_for_algo.as_ref().clone());
-                req.into_ok_response()?
-                    .write_all(serve_algo_setup_page(saved_algorithm.0, saved_algorithm.1).as_ref())
-                    .map(|_| ())?;
-                return Ok(());
-            }
-            let mod_b_value = b_value
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned("0.0".to_string()));
-            let mod_m_value = m_value
-                .map(Cow::Borrowed)
-                .unwrap_or_else(|| Cow::Owned("1.0".to_string()));
-            match helpers::save_algorithm_variables(
-                &mod_b_value,
-                &mod_m_value,
-                cloned_nvs_for_algo.as_ref().clone(),
-            ) {
-                Ok(_) => {
-                    req.into_ok_response()?
-                        .write_all(
-                            serve_algo_setup_page(
-                                mod_b_value.parse::<f32>().unwrap_or(0.0),
-                                mod_m_value.parse::<f32>().unwrap_or(1.0),
-                            )
-                            .as_ref(),
-                        )
-                        .map(|_| ())?;
-                    return Ok(());
-                }
-                Err(e) => {
-                    error!("{:?}", e);
-                    FreeRtos.delay_ms(50);
-                    reset::restart();
-                }
-            };
+            routes::algorithm_route(req, cloned_nvs_for_algo.clone())
         })
         .unwrap();
 
@@ -299,51 +202,16 @@ fn main() -> Result<(), ()> {
     let cloned_nvs_for_ws = Arc::new(nvs.clone());
     server
         .ws_handler("/ws", move |ws: &mut EspHttpWsConnection| {
-            let mut last_sent = Instant::now();
-            let saved_algorithm =
-                helpers::get_saved_algorithm_variables(cloned_nvs_for_ws.as_ref().clone());
-
-            loop {
-                if ws.is_closed() {
-                    break;
-                }
-
-                if last_sent.elapsed() >= Duration::from_millis(500) {
-                    last_sent = Instant::now();
-                    let reading = veml.lock().unwrap().read_lux().unwrap();
-
-                    let ws_message: String;
-                    if 0.8 < reading / dark_baseline_reading {
-                        let wifi_stat = wifi_status.lock().unwrap();
-                        match *wifi_stat {
-                            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-                            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-                            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-                        }
-                        log::info!("No filament!");
-                        ws_message = "no_filament".to_string()
-                    } else {
-                        set_led(ws2812.clone(), 0, 125, 125);
-                        log::info!("Filament detected!");
-                        led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
-                        FreeRtos.delay_ms(2);
-                        let reading = veml.lock().unwrap().read_lux().unwrap();
-                        let td_value = (reading / baseline_reading) * 100.0;
-                        let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
-                        ws_message = adjusted_td_value.to_string();
-                        led_light.lock().unwrap().set_duty(25).unwrap();
-                        log::info!("Reading: {}", td_value);
-                    }
-                    if let Err(e) = ws.send(FrameType::Text(false), ws_message.as_ref()) {
-                        log::error!("Error sending WebSocket message: {:?}", e);
-                        break;
-                    }
-                }
-
-                FreeRtos.delay_ms(2);
-            }
-
-            Ok::<(), EspError>(())
+            routes::ws_route(
+                ws,
+                cloned_nvs_for_ws.clone(),
+                dark_baseline_reading,
+                baseline_reading,
+                veml.clone(),
+                ws2812.clone(),
+                wifi_status.clone(),
+                led_light.clone(),
+            )
         })
         .unwrap();
 
