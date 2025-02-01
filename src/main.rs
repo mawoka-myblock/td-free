@@ -1,14 +1,20 @@
 #![feature(iter_intersperse)]
 
 use core::time::Duration;
+use edge_http::io::server::{DefaultServer, Handler};
+use edge_nal::TcpBind;
+use edge_ws::{FrameHeader, FrameType};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
 use esp_idf_svc::http::server::EspHttpServer;
+use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
 use esp_idf_svc::http::Method;
-use esp_idf_svc::io::{vfs, Write};
+use esp_idf_svc::io::{vfs, Write as _};
+use edge_http::io::Error as EdgeError;
+use edge_http::Method as EdgeMethod;
 
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::timer::EspTaskTimerService;
@@ -25,6 +31,11 @@ use esp_idf_svc::{
 use std::sync::{Arc, Mutex};
 use veml7700::Veml7700;
 use wifi::WifiEnum;
+use core::fmt::{Debug, Display};
+
+use edge_http::io::server::Connection;
+
+use embedded_io_async::{Read, Write};
 // use wifi::get;
 use esp_idf_svc::http::server::ws::EspHttpWsConnection;
 use ws2812_esp32_rmt_driver::{driver::color::LedPixelColorGrb24, LedPixelEsp32Rmt, RGB8};
@@ -148,76 +159,131 @@ fn main() -> Result<(), ()> {
         ..Default::default()
     };
 
-    let mut server = EspHttpServer::new(&server_configuration).unwrap();
     let cloned_nvs = Arc::new(nvs.clone());
     let cloned_nvs_for_algo = Arc::new(nvs.clone());
+    let mut server = DefaultServer::new();
 
-    server
-        .fn_handler("/", Method::Get, |req| {
-            req.into_ok_response()?
-                .write_all(
-                    INDEX_HTML
-                        .replace(
-                            "{{VERSION}}",
-                            option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
-                        )
-                        .as_bytes(),
-                )
-                .map(|_| ())
-        })
-        .unwrap();
+    futures_lite::future::block_on(run(&mut server)).unwrap();
+    Ok(())
+}
 
-    server
-        .fn_handler::<anyhow::Error, _>("/wifi", Method::Get, move |req| {
-            routes::wifi_route(req, cloned_nvs.clone())
-        })
-        .unwrap();
-    server
-        .fn_handler::<anyhow::Error, _>("/algorithm", Method::Get, move |req| {
-            routes::algorithm_route(req, cloned_nvs_for_algo.clone())
-        })
-        .unwrap();
+pub async fn run(server: &mut DefaultServer) -> Result<(), anyhow::Error> {
+    let addr = "0.0.0.0:8881";
 
-    #[cfg(feature = "ota")]
-    server
-        .fn_handler::<anyhow::Error, _>("/update", Method::Post, move |mut req| {
-            let mut ota = esp_ota::OtaUpdate::begin()?;
-            let mut update_buffer: Vec<u8> = vec![];
-            req.read(&mut update_buffer)?;
-            ota.write(&mut update_buffer)?;
-            let mut completed_update = ota.finalize()?;
-            completed_update.set_as_boot_partition()?;
-            log::info!("Update successful, restarting!");
-            completed_update.restart();
-        })
-        .unwrap();
-    #[cfg(feature = "ota")]
-    server
-        .fn_handler::<anyhow::Error, _>("/update", Method::Get, move |req| {
-            req.into_ok_response()?.write_all(UPDATE_HTML.as_bytes())?;
-            Ok(())
-        })
-        .unwrap();
+    log::info!("Running HTTP server on {addr}");
 
-    let cloned_nvs_for_ws = Arc::new(nvs.clone());
-    server
-        .ws_handler("/ws", move |ws: &mut EspHttpWsConnection| {
-            routes::ws_route(
-                ws,
-                cloned_nvs_for_ws.clone(),
-                dark_baseline_reading,
-                baseline_reading,
-                veml.clone(),
-                ws2812.clone(),
-                wifi_status.clone(),
-                led_light.clone(),
-            )
-        })
-        .unwrap();
+    let acceptor = edge_nal_std::Stack::new()
+        .bind(addr.parse().unwrap())
+        .await?;
 
-    log::info!("Finished setup!");
-    loop {
-        FreeRtos.delay_ms(500u32);
+    server.run(None, acceptor, WsHandler).await.unwrap();
+
+    Ok(())
+}
+
+#[derive(Debug)]
+enum WsHandlerError<C, W> {
+    Connection(C),
+    Ws(W),
+}
+
+impl<C, W> From<C> for WsHandlerError<C, W> {
+    fn from(e: C) -> Self {
+        Self::Connection(e)
+    }
+}
+
+struct WsHandler;
+
+impl Handler for WsHandler {
+    type Error<E>
+        = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
+    where
+        E: Debug;
+
+    async fn handle<T, const N: usize>(
+        &self,
+        _task_id: impl Display + Clone,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), Self::Error<T::Error>>
+    where
+        T: Read + Write,
+    {
+        let headers = conn.headers()?;
+
+        if headers.method != EdgeMethod::Get {
+            conn.initiate_response(405, Some("Method Not Allowed"), &[])
+                .await?;
+        } else if headers.path != "/" {
+            conn.initiate_response(404, Some("Not Found"), &[]).await?;
+        } else if !conn.is_ws_upgrade_request()? {
+            conn.initiate_response(200, Some("OK"), &[("Content-Type", "text/plain")])
+                .await?;
+
+            conn.write_all(b"Initiate WS Upgrade request to switch this connection to WS")
+                .await?;
+        } else {
+            let mut buf = [0_u8; MAX_BASE64_KEY_RESPONSE_LEN];
+            conn.initiate_ws_upgrade_response(&mut buf).await?;
+
+            conn.complete().await?;
+
+            log::info!("Connection upgraded to WS, starting a simple WS echo server now");
+
+            // Now we have the TCP socket in a state where it can be operated as a WS connection
+            // Run a simple WS echo server here
+
+            let mut socket = conn.unbind()?;
+
+            let mut buf = [0_u8; 8192];
+
+            loop {
+                let mut header = FrameHeader::recv(&mut socket)
+                    .await
+                    .map_err(WsHandlerError::Ws)?;
+                let payload = header
+                    .recv_payload(&mut socket, &mut buf)
+                    .await
+                    .map_err(WsHandlerError::Ws)?;
+
+                match header.frame_type {
+                    FrameType::Text(_) => {
+                        log::info!(
+                            "Got {header}, with payload \"{}\"",
+                            core::str::from_utf8(payload).unwrap()
+                        );
+                    }
+                    FrameType::Binary(_) => {
+                        log::info!("Got {header}, with payload {payload:?}");
+                    }
+                    FrameType::Close => {
+                        log::info!("Got {header}, client closed the connection cleanly");
+                        break;
+                    }
+                    _ => {
+                        log::info!("Got {header}");
+                    }
+                }
+
+                // Echo it back now
+
+                header.mask_key = None; // Servers never mask the payload
+
+                if matches!(header.frame_type, FrameType::Ping) {
+                    header.frame_type = FrameType::Pong;
+                }
+
+                log::info!("Echoing back as {header}");
+
+                header.send(&mut socket).await.map_err(WsHandlerError::Ws)?;
+                header
+                    .send_payload(&mut socket, payload)
+                    .await
+                    .map_err(WsHandlerError::Ws)?;
+            }
+        }
+
+        Ok(())
     }
 }
 

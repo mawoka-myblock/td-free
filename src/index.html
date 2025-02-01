@@ -130,6 +130,14 @@
 
         // When a message is received
         socket.addEventListener("message", (event) => {
+            if (event.data === 'ping') {
+                // Handle ping message from the server
+                console.log('Received ping from server, responding with pong...');
+                socket.send('pong'); // Send pong response
+            } else if (event.data === 'pong') {
+                // Handle pong message from the server
+                console.log('Received pong from server');
+            }
             const el = document.getElementById("content")
             if (event.data === "no_filament") {
                 el.innerText = "No filament inserted! Insert some"

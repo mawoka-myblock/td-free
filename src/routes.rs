@@ -1,6 +1,7 @@
 use std::{
     borrow::Cow,
     collections::HashMap,
+    str,
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
@@ -151,11 +152,11 @@ pub fn ws_route(
     let saved_algorithm = helpers::get_saved_algorithm_variables(nvs.as_ref().clone());
 
     let mut last_sent = Instant::now();
+    let mut last_pong_sent = Instant::now();
+    let ping_interval = Duration::from_secs(5); // Set the ping interval to 5 seconds
+    let pong_timeout = Duration::from_secs(1); // Wait for pong for 1 second
 
     while !ws.is_closed() {
-        log::info!("WebSocket Closed: {:?}", ws.is_closed());
-        // Wait for an incoming WebSocket message (Non-blocking!)
-
         // Send sensor data only if the time interval has passed
         if last_sent.elapsed() >= Duration::from_millis(500) {
             last_sent = Instant::now();
@@ -215,10 +216,74 @@ pub fn ws_route(
             }
         }
 
+        // Ping-pong mechanism: Send ping and wait for pong
+        if last_pong_sent.elapsed() >= ping_interval {
+            last_pong_sent = Instant::now();
+
+            // Send a ping message to the client
+            if let Err(e) = ws.send(FrameType::Text(false), b"ping") {
+                log::error!("Error sending Ping message: {:?}", e);
+                break; // Exit loop if ping fails
+            }
+
+            log::info!("Ping sent, waiting for Pong...");
+
+            // Wait for Pong (we set a timeout of 1 second)
+            let start_wait = Instant::now();
+
+            // Step 1: Call `recv()` to get the frame size (empty buffer)
+            let (_frame_type, len) = match ws.recv(&mut []) {
+                Ok(frame) => frame,
+                Err(e) => {
+                    log::error!("Error receiving frame size: {:?}", e);
+                    continue; // Retry on failure
+                }
+            };
+
+            // Check if the length is within bounds (you can adjust MAX_LEN as needed)
+            if len > 128 {
+                log::error!("Received frame too large, closing connection.");
+                ws.send(FrameType::Text(false), "Request too big".as_bytes())?;
+                ws.send(FrameType::Close, &[])?;
+                break; // Exit the loop
+            }
+
+            // Step 2: Now call `recv()` again with a buffer to actually receive the data
+            let mut buf = [0; 128]; // Buffer to store the received message
+            if let Err(e) = ws.recv(buf.as_mut()) {
+                log::error!("Error receiving frame data: {:?}", e);
+                continue; // Retry on failure
+            }
+
+            // Convert the received bytes to a string and check for errors
+            let pong_str = match str::from_utf8(&buf[..len]) {
+                Ok(pong) => pong,
+                Err(_) => {
+                    ws.send(FrameType::Text(false), "[UTF-8 Error]".as_bytes())?;
+                    log::error!("UTF-8 Error!");
+                    continue; // Skip further processing on error
+                }
+            };
+
+            log::info!("Pong received: {}", pong_str);
+
+            // If no pong or wrong pong, exit and close the connection
+            if pong_str != "pong" {
+                log::error!("Received unexpected message: {}", pong_str);
+                continue; // Skip if message is not "pong"
+            }
+
+            if start_wait.elapsed() >= pong_timeout {
+                log::error!("No Pong received within timeout, closing connection.");
+                ws.send(FrameType::Close, &[])?;
+                break; // Exit the loop and close the connection
+            }
+        }
+
+        // Allow other tasks to execute
         FreeRtos::delay_ms(10); // Allows other tasks to execute
     }
 
     log::info!("WebSocket closed, exiting thread.");
-
     Ok(())
 }

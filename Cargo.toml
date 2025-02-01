@@ -31,17 +31,18 @@ std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
 alloc = ["esp-idf-svc/alloc"]
 nightly = ["esp-idf-svc/nightly"]
 experimental = ["esp-idf-svc/experimental"]
-embassy = [
-    "esp-idf-svc/embassy-sync",
-    "esp-idf-svc/critical-section",
-    "esp-idf-svc/embassy-time-driver",
-]
 
 [dependencies]
 log = { version = "0.4", default-features = false }
 esp-idf-svc = { version = "0.49", default-features = false, features= ["experimental"] }
 embedded-hal = "1"
 heapless = "0.8"
+edge-http = {version = "0.5", features = ["embedded-svc"]}
+embedded-io-async = { version = "0.6", default-features = false }
+edge-nal-std = "0.5"
+edge-nal = "0.5"
+edge-ws = "0.4"
+futures-lite = "2.6"
 
 
 anyhow = "1"
@@ -58,7 +59,8 @@ smart-leds = "0.4"
 #edge-captive = { version = "0.3", features = ["std", "io"] }
 #edge-nal-std = "0.3"
 #async-io-mini = "0.2"
-
+embassy-time = { version = "0.4.0", features = ["log", "std"] }
+embassy-executor = { version = "0.7.0", features = ["arch-std"] }
 
 [build-dependencies]
 embuild = "0.32.0"
