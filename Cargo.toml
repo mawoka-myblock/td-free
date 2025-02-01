@@ -59,7 +59,7 @@ smart-leds = "0.4"
 #edge-captive = { version = "0.3", features = ["std", "io"] }
 #edge-nal-std = "0.3"
 #async-io-mini = "0.2"
-embassy-time = { version = "0.4.0", features = ["log", "std"] }
+embassy-time = { version = "0.4.0", features = ["log", "std", "generic-queue-8"] }
 embassy-executor = { version = "0.7.0", features = ["arch-std"] }
 
 [build-dependencies]

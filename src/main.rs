@@ -163,7 +163,7 @@ fn main() -> Result<(), ()> {
     let cloned_nvs_for_algo = Arc::new(nvs.clone());
     let mut server = DefaultServer::new();
 
-    futures_lite::future::block_on(run(&mut server)).unwrap();
+    block_on(run(&mut server)).unwrap();
     Ok(())
 }
 
