@@ -150,79 +150,75 @@ pub fn ws_route(
 ) -> Result<(), anyhow::Error> {
     let saved_algorithm = helpers::get_saved_algorithm_variables(nvs.as_ref().clone());
 
-    std::thread::spawn(move || {
-        let mut last_sent = Instant::now();
+    let mut last_sent = Instant::now();
 
-        while !ws.is_closed() {
-            // Wait for an incoming WebSocket message (Non-blocking!)
-            if let Ok(Some(_frame)) = ws.recv(Duration::from_millis(500)) {
-                log::info!("Received WebSocket message.");
-            }
+    while !ws.is_closed() {
+        log::info!("WebSocket Closed: {:?}", ws.is_closed());
+        // Wait for an incoming WebSocket message (Non-blocking!)
 
-            // Send sensor data only if the time interval has passed
-            if last_sent.elapsed() >= Duration::from_millis(500) {
-                last_sent = Instant::now();
+        // Send sensor data only if the time interval has passed
+        if last_sent.elapsed() >= Duration::from_millis(500) {
+            last_sent = Instant::now();
 
-                // Read the sensor value
+            // Read the sensor value
+            let reading = match veml.lock().unwrap().read_lux() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Failed to read sensor: {:?}", e);
+                    continue;
+                }
+            };
+
+            let ws_message: String;
+            if reading / dark_baseline_reading > 0.8 {
+                let wifi_stat = wifi_status.lock().unwrap();
+                match *wifi_stat {
+                    WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
+                    WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
+                    WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
+                }
+                log::info!("No filament detected!");
+                ws_message = "no_filament".to_string();
+            } else {
+                log::info!("Filament detected!");
+
+                let mut led = led_light.lock().unwrap();
+                if let Err(e) = led.set_duty_cycle_fully_on() {
+                    log::error!("Failed to set LED duty cycle: {:?}", e);
+                    continue;
+                }
+
+                FreeRtos::delay_ms(2); // Short delay before measuring again
                 let reading = match veml.lock().unwrap().read_lux() {
                     Ok(r) => r,
                     Err(e) => {
-                        log::error!("Failed to read sensor: {:?}", e);
+                        log::error!("Failed to read sensor after LED activation: {:?}", e);
                         continue;
                     }
                 };
 
-                let ws_message: String;
-                if reading / dark_baseline_reading > 0.8 {
-                    let wifi_stat = wifi_status.lock().unwrap();
-                    match *wifi_stat {
-                        WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-                        WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-                        WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-                    }
-                    log::info!("No filament detected!");
-                    ws_message = "no_filament".to_string();
-                } else {
-                    log::info!("Filament detected!");
+                let td_value = (reading / baseline_reading) * 100.0;
+                let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
+                ws_message = adjusted_td_value.to_string();
 
-                    let mut led = led_light.lock().unwrap();
-                    if let Err(e) = led.set_duty_cycle_fully_on() {
-                        log::error!("Failed to set LED duty cycle: {:?}", e);
-                        continue;
-                    }
-
-                    FreeRtos::delay_ms(2); // Short delay before measuring again
-                    let reading = match veml.lock().unwrap().read_lux() {
-                        Ok(r) => r,
-                        Err(e) => {
-                            log::error!("Failed to read sensor after LED activation: {:?}", e);
-                            continue;
-                        }
-                    };
-
-                    let td_value = (reading / baseline_reading) * 100.0;
-                    let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
-                    ws_message = adjusted_td_value.to_string();
-
-                    if let Err(e) = led.set_duty(25) {
-                        log::error!("Failed to adjust LED duty: {:?}", e);
-                    }
-
-                    log::info!("Reading: {}", td_value);
+                if let Err(e) = led.set_duty(25) {
+                    log::error!("Failed to adjust LED duty: {:?}", e);
                 }
 
-                // Send data via WebSocket
-                if let Err(e) = ws.send(FrameType::Text(false), ws_message.as_ref()) {
-                    log::error!("Error sending WebSocket message: {:?}", e);
-                    break; // Exit loop on WebSocket error
-                }
+                log::info!("Reading: {}", td_value);
             }
 
-            FreeRtos::delay_ms(10); // Allows other tasks to execute
+            // Send data via WebSocket
+            if let Err(e) = ws.send(FrameType::Text(false), ws_message.as_ref()) {
+                log::error!("Error sending WebSocket message: {:?}", e);
+                break; // Exit loop on WebSocket error
+            }
         }
 
-        log::info!("WebSocket closed, exiting thread.");
-    });
+        FreeRtos::delay_ms(10); // Allows other tasks to execute
+    }
+
+    log::info!("WebSocket closed, exiting thread.");
 
     Ok(())
 }
