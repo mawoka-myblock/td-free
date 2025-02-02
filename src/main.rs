@@ -2,20 +2,19 @@
 
 use core::time::Duration;
 use edge_http::io::server::{DefaultServer, Handler};
+use edge_http::io::Error as EdgeError;
+use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
+use edge_http::Method as EdgeMethod;
 use edge_nal::TcpBind;
 use edge_ws::{FrameHeader, FrameType};
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
-use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::http::server::EspHttpServer;
-use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
-use esp_idf_svc::http::Method;
-use esp_idf_svc::io::{vfs, Write as _};
-use edge_http::io::Error as EdgeError;
-use edge_http::Method as EdgeMethod;
+use futures_lite::future::block_on;
+use std::net::SocketAddr;
 
+use core::fmt::{Debug, Display};
 use esp_idf_svc::nvs::EspDefaultNvsPartition;
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
@@ -31,23 +30,18 @@ use esp_idf_svc::{
 use std::sync::{Arc, Mutex};
 use veml7700::Veml7700;
 use wifi::WifiEnum;
-use core::fmt::{Debug, Display};
 
 use edge_http::io::server::Connection;
 
 use embedded_io_async::{Read, Write};
 // use wifi::get;
-use esp_idf_svc::http::server::ws::EspHttpWsConnection;
-use ws2812_esp32_rmt_driver::{driver::color::LedPixelColorGrb24, LedPixelEsp32Rmt, RGB8};
-// mod dns;
+// use esp_idf_svc::http::server::ws::EspHttpWsConnection;// mod dns;
 mod helpers;
-mod led;
-mod routes;
+// mod led;
+// mod routes;
 mod wifi;
 
 static INDEX_HTML: &str = include_str!("index.html");
-#[cfg(feature = "ota")]
-static UPDATE_HTML: &str = include_str!("update_page.html");
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -56,7 +50,6 @@ static GIT_DESCRIBE: &str = env!("VERGEN_GIT_DESCRIBE");
 static GIT_COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
 static GIT_COMMIT_AUTHOR_NAME: &str = env!("VERGEN_GIT_COMMIT_AUTHOR_NAME");
 
-pub type LedType<'a> = LedPixelEsp32Rmt<'static, RGB8, LedPixelColorGrb24>;
 fn main() -> Result<(), ()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -95,19 +88,6 @@ fn main() -> Result<(), ()> {
     ));
 
     let rgb_led_channel = peripherals.rmt.channel0;
-    let ws2812: Arc<
-        Mutex<
-            LedPixelEsp32Rmt<
-                '_,
-                smart_leds::RGB<u8>,
-                ws2812_esp32_rmt_driver::driver::color::LedPixelColorImpl<3, 1, 0, 2, 255>,
-            >,
-        >,
-    > = Arc::new(Mutex::new(
-        LedType::new(rgb_led_channel, rgb_led_pin).unwrap(),
-    ));
-    let pixels = std::iter::repeat(RGB8::new(255, 255, 0)).take(1);
-    ws2812.lock().unwrap().write_nocopy(pixels).unwrap();
 
     let config = I2cConfig::new()
         .baudrate(20.kHz().into())
@@ -116,7 +96,6 @@ fn main() -> Result<(), ()> {
 
     let sysloop = EspSystemEventLoop::take().unwrap();
 
-    vfs::initialize_eventfd(5).unwrap();
 
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let timer_service = EspTaskTimerService::new().unwrap();
@@ -128,7 +107,7 @@ fn main() -> Result<(), ()> {
     FreeRtos.delay_ms(500);
     match veml.lock().unwrap().enable() {
         Ok(()) => (),
-        Err(_) => led::show_veml_not_found_error(ws2812.clone()),
+        Err(_) => log::error!("VEML failed"),
     };
 
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
@@ -141,7 +120,6 @@ fn main() -> Result<(), ()> {
     block_on(wifi::wifi_setup(
         &mut wifi,
         nvs.clone(),
-        ws2812.clone(),
         wifi_status.clone(),
     ))
     .unwrap();
@@ -153,30 +131,43 @@ fn main() -> Result<(), ()> {
            .unwrap();
        log::info!("DNS Started");
     */
-    let server_configuration = esp_idf_svc::http::server::Configuration {
-        stack_size: 10240,
+    // let server_configuration = esp_idf_svc::http::server::Configuration {
+    //     stack_size: 10240,
 
-        ..Default::default()
-    };
+    //     ..Default::default()
+    // };
 
-    let cloned_nvs = Arc::new(nvs.clone());
-    let cloned_nvs_for_algo = Arc::new(nvs.clone());
+    // let cloned_nvs = Arc::new(nvs.clone());
+    // let cloned_nvs_for_algo = Arc::new(nvs.clone());
     let mut server = DefaultServer::new();
+    log::info!("Server created");
 
-    block_on(run(&mut server)).unwrap();
+    match block_on(run(&mut server)) {
+        Ok(_) => (),
+        Err(e) => log::error!("block_on: {:?}", e),
+    };
     Ok(())
 }
 
 pub async fn run(server: &mut DefaultServer) -> Result<(), anyhow::Error> {
-    let addr = "0.0.0.0:8881";
+    let addr: SocketAddr = match "0.0.0.0:8881".parse() {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("socket_addr: {:?}", e);
+            return Ok(());
+        }
+    };
 
     log::info!("Running HTTP server on {addr}");
 
     let acceptor = edge_nal_std::Stack::new()
-        .bind(addr.parse().unwrap())
+        .bind(addr)
         .await?;
 
-    server.run(None, acceptor, WsHandler).await.unwrap();
+    match server.run(None, acceptor, WsHandler).await {
+        Ok(_) => (),
+        Err(e) => log::error!("server.run: {:?}", e),
+    };
 
     Ok(())
 }

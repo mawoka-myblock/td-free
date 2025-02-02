@@ -14,7 +14,6 @@ use esp_idf_svc::{
 };
 use log::{info, warn};
 
-use crate::{led::set_led, LedType};
 
 async fn wifi_client(
     ssid: &str,
@@ -93,7 +92,6 @@ pub enum WifiEnum {
 pub async fn wifi_setup(
     wifi: &mut AsyncWifi<EspWifi<'static>>,
     nvs: EspNvsPartition<NvsDefault>,
-    led: Arc<Mutex<LedType<'_>>>,
     wifi_status: Arc<Mutex<WifiEnum>>,
 ) -> anyhow::Result<WifiEnum> {
     let nvs = match EspNvs::new(nvs, "wifi", true) {
@@ -101,7 +99,6 @@ pub async fn wifi_setup(
         Err(_) => {
             warn!("NVS read error, starting hotspot");
             wifi_hotspot(wifi).await?;
-            set_led(led, 255, 0, 255);
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
             return Ok(WifiEnum::HotSpot);
@@ -114,7 +111,6 @@ pub async fn wifi_setup(
     if wifi_password.is_none() || wifi_ssid.is_none() {
         info!("SSID and/or Password empty");
         wifi_hotspot(wifi).await?;
-        set_led(led, 255, 0, 255);
         let mut w_status = wifi_status.lock().unwrap();
         *w_status = WifiEnum::HotSpot;
         return Ok(WifiEnum::HotSpot);
@@ -124,12 +120,10 @@ pub async fn wifi_setup(
     if wifi_client_res.is_err() {
         warn!("Wifi connection failed, falling back to hotspot");
         wifi_hotspot(wifi).await?;
-        set_led(led, 255, 0, 255);
         let mut w_status = wifi_status.lock().unwrap();
         *w_status = WifiEnum::HotSpot;
         return Ok(WifiEnum::HotSpot);
     }
-    set_led(led, 0, 255, 0);
     let mut w_status = wifi_status.lock().unwrap();
     *w_status = WifiEnum::Connected;
     Ok(WifiEnum::Connected)
