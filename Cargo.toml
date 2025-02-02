@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Mawoka <git@mawoka.eu>"]
 edition = "2021"
 resolver = "2"
-rust-version = "1.77"
+rust-version = "1.84"
 
 [[bin]]
 name = "td-free-rs"
@@ -21,28 +21,16 @@ strip = true
 debug = true    # Symbols are nice and they don't increase the size on Flash
 opt-level = "z"
 
-[features]
-# ota = ["dep:esp-ota"]
-default = ["std", "esp-idf-svc/native"]
-#critical-section-impl = ["critical-section/restore-state-none"]
-
-pio = ["esp-idf-svc/pio"]
-std = ["alloc", "esp-idf-svc/binstart", "esp-idf-svc/std"]
-alloc = ["esp-idf-svc/alloc"]
-nightly = ["esp-idf-svc/nightly"]
-experimental = ["esp-idf-svc/experimental"]
-
 [dependencies]
-log = { version = "0.4", default-features = false }
-esp-idf-svc = { version = "0.51", default-features = false, features= ["experimental", "embassy-time-driver"] }
+log = "0.4"
+esp-idf-svc = { version = "0.51", features= ["experimental", "embassy-time-driver", "critical-section"] }
 embedded-hal = "1"
 heapless = "0.8"
-edge-http = {version = "0.5", features = ["embedded-svc"]}
-embedded-io-async = { version = "0.6", default-features = false }
-edge-nal-std = {version = "0.5"}
+edge-http = "0.5.1"
+embedded-io-async = "0.6"
+edge-nal-std = { version = "0.5", features = ["async-io-mini"] }
 edge-nal = "0.5"
 edge-ws = "0.4"
-futures-lite = "2.6"
 
 
 anyhow = "1"
@@ -50,13 +38,12 @@ url = "2.5"
 
 
 veml7700 = "0.2.0"
-embassy-time = { version = "0.4.0", features = ["log", "std", "generic-queue-8"] }
+embassy-time = { version = "0.4", features = ["log", "generic-queue-8"] }
 
 [build-dependencies]
-embuild = {version = "0.33.0", features = ["espidf"]}
+embuild = {version = "0.33", features = ["espidf"]}
 vergen-gix = { version = "1", features = ["build", "rustc"] }
 anyhow = "1"
-cc = "=1.1.20"
 
 # [package.metadata.espflash]
 # partition_table = "partitions.csv"
