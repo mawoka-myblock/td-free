@@ -35,22 +35,6 @@
             margin-bottom: 20px;
         }
 
-        .message {
-            background-color: #e0f7fa;
-            border-left: 4px solid #00796b;
-            padding: 10px;
-            margin: 10px 0;
-            border-radius: 5px;
-            color: #00796b;
-            word-wrap: break-word;
-        }
-
-        .timestamp {
-            font-size: 0.8em;
-            color: #666;
-            text-align: right;
-        }
-
         .status {
             text-align: center;
             padding: 10px;
@@ -75,6 +59,17 @@
             margin: auto;
             font-size: 3rem;
         }
+
+        .fallback-btn {
+            display: none;
+            margin: 10px auto;
+            padding: 10px 20px;
+            background-color: #00796b;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
     </style>
 </head>
 
@@ -83,6 +78,7 @@
         <h1>Td-Free</h1>
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
+        <button id="fallback-btn" class="fallback-btn" onclick="enableFallback()">Enable Fallback Mode</button>
         <div style="display: flex; flex-direction: column; margin-top: auto;">
             <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
             <p class="wifi-link" style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
@@ -91,75 +87,82 @@
     </div>
 
     <script>
-        // Replace this URL with your WebSocket server URL
-        const socket = new WebSocket(`ws://${window.location.hostname}/ws`);
+        let socket;
+        let intervalId;
+        let fallbackInterval;
+        let fallbackEnabled = false;
 
-        const messagesContainer = document.getElementById("messages");
-        const statusContainer = document.getElementById("status");
+        function connectWebSocket() {
+            socket = new WebSocket(`ws://${window.location.hostname}/ws`);
+            const statusContainer = document.getElementById("status");
 
-        let intervalId
+            socket.addEventListener("open", () => {
+                statusContainer.textContent = "Connected to WebSocket server";
+                statusContainer.classList.add("connected");
+                document.getElementById("fallback-btn").style.display = "none";
+                if (intervalId) clearInterval(intervalId);
+                intervalId = setInterval(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        socket.send("p");
+                    }
+                }, 1000);
+            });
 
-        const wifi_cfg = (e) => {
-            e.preventDefault()
-            socket.close()
-            window.location.assign("/wifi")
+            socket.addEventListener("message", (event) => {
+                if (event.data === 'p') return;
+                updateContent(event.data);
+            });
+
+            socket.addEventListener("close", () => {
+                statusContainer.textContent = "Disconnected from WebSocket server";
+                statusContainer.classList.remove("connected");
+                clearInterval(intervalId);
+                document.getElementById("fallback-btn").style.display = "block";
+            });
+
+            socket.addEventListener("error", () => {
+                statusContainer.textContent = "Error connecting to WebSocket server";
+                statusContainer.classList.remove("connected");
+                clearInterval(intervalId);
+                document.getElementById("fallback-btn").style.display = "block";
+            });
+
+            window.addEventListener("beforeunload", () => {
+                socket.close();
+            });
         }
-        const update_fw = (e) => {
-            e.preventDefault()
-            socket.close()
-            window.location.assign("/update")
+
+        function enableFallback() {
+            fallbackEnabled = true;
+            document.getElementById("status").textContent = "Fallback mode enabled";
+            document.getElementById("fallback-btn").style.display = "none";
+            fallbackInterval = setInterval(fetchFallbackData, 1000);
         }
 
-        // When the connection is open
-        socket.addEventListener("open", () => {
-            statusContainer.textContent = "Connected to WebSocket server";
-            statusContainer.classList.add("connected");
+        function fetchFallbackData() {
+            fetch("/fallback")
+                .then(response => response.text())
+                .then(data => updateContent(data))
+                .catch(() => {
+                    document.getElementById("status").textContent = "Error fetching fallback data";
+                });
+        }
 
-            if (intervalId) {
-                clearInterval(intervalId); // Clear any existing interval
-            }
-            intervalId = setInterval(() => {
-                if (socket.readyState === WebSocket.OPEN) {
-                    socket.send("p");
-                    console.log("Sent: p");
-                }
-            }, 1000);
-
-
-        });
-
-        // When a message is received
-        socket.addEventListener("message", (event) => {
-            const el = document.getElementById("content")
-            if (event.data === "no_filament") {
-                el.innerText = "No filament inserted! Insert some"
+        function updateContent(data) {
+            const el = document.getElementById("content");
+            if (data === "no_filament") {
+                el.innerText = "No filament inserted! Insert some";
             } else {
-                const num = parseFloat(event.data)
+                const num = parseFloat(data);
                 if (isNaN(num)) {
-                    el.innerText = "An error occured!"
-                    return
+                    el.innerText = "An error occurred!";
+                    return;
                 }
-                el.innerText = num.toFixed(2)
+                el.innerText = num.toFixed(2);
             }
-        });
+        }
 
-        // When the connection is closed or there's an error
-        socket.addEventListener("close", () => {
-            statusContainer.textContent = "Disconnected from WebSocket server";
-            statusContainer.classList.remove("connected");
-            clearInterval(intervalId)
-
-        });
-
-        socket.addEventListener("error", () => {
-            statusContainer.textContent = "Error connecting to WebSocket server";
-            statusContainer.classList.remove("connected");
-            clearInterval(intervalId)
-        });
-
-        window.addEventListener("beforeunload", () => {
-            socket.close()
-        })
+        connectWebSocket();
     </script>
 </body>
 

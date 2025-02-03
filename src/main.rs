@@ -1,18 +1,34 @@
 #![feature(iter_intersperse)]
 
+use core::fmt::{Debug, Display};
+use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use core::time::Duration;
+
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+
+use edge_http::io::server::Connection;
+use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
+use edge_http::io::Error as EdgeError;
+use edge_http::Method as EdgeMethod;
+use edge_nal::TcpBind;
+
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
+
+use embedded_io_async::{Read, Write};
+
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::http::server::EspHttpServer;
-use esp_idf_svc::http::Method;
-use esp_idf_svc::io::{vfs, Write};
-
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::ipv4::{
+    self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
+    DHCPClientSettings, Mask, RouterConfiguration, Subnet,
+};
+use esp_idf_svc::netif::{EspNetif, NetifConfiguration};
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvsPartition, NvsDefault};
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
+use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{
@@ -22,21 +38,19 @@ use esp_idf_svc::{
         prelude::*,
     },
 };
-use std::sync::{Arc, Mutex};
+
+use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
-// use wifi::get;
-use esp_idf_svc::http::server::ws::EspHttpWsConnection;
-use ws2812_esp32_rmt_driver::{driver::color::LedPixelColorGrb24, LedPixelEsp32Rmt, RGB8};
-// mod dns;
+use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
+use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
+
 mod helpers;
 mod led;
 mod routes;
 mod wifi;
 
 static INDEX_HTML: &str = include_str!("index.html");
-#[cfg(feature = "ota")]
-static UPDATE_HTML: &str = include_str!("update_page.html");
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -45,7 +59,9 @@ static GIT_DESCRIBE: &str = env!("VERGEN_GIT_DESCRIBE");
 static GIT_COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
 static GIT_COMMIT_AUTHOR_NAME: &str = env!("VERGEN_GIT_COMMIT_AUTHOR_NAME");
 
+pub const IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 71, 1);
 pub type LedType<'a> = LedPixelEsp32Rmt<'static, RGB8, LedPixelColorGrb24>;
+
 fn main() -> Result<(), ()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
@@ -71,7 +87,7 @@ fn main() -> Result<(), ()> {
 
     let light_timer_driver = LedcTimerDriver::new(
         peripherals.ledc.timer1,
-        &TimerConfig::default().frequency(110.Hz().into()),
+        &TimerConfig::default().frequency(110.Hz()),
     )
     .unwrap();
     let led_light: Arc<Mutex<LedcDriver<'_>>> = Arc::new(Mutex::new(
@@ -105,11 +121,37 @@ fn main() -> Result<(), ()> {
 
     let sysloop = EspSystemEventLoop::take().unwrap();
 
-    vfs::initialize_eventfd(5).unwrap();
-
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let timer_service = EspTaskTimerService::new().unwrap();
-    let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    // let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    let wifi_raw_driver =
+        WifiDriver::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    let driver = EspWifi::wrap_all(
+        wifi_raw_driver,
+        EspNetif::new_with_conf(&NetifConfiguration {
+            ip_configuration: Some(IpConfiguration::Client(IpClientConfiguration::DHCP(
+                DHCPClientSettings {
+                    hostname: Some("tdfree".try_into().unwrap()),
+                },
+            ))),
+            ..NetifConfiguration::wifi_default_client()
+        })
+        .unwrap(),
+        EspNetif::new_with_conf(&NetifConfiguration {
+            ip_configuration: Some(ipv4::Configuration::Router(RouterConfiguration {
+                subnet: Subnet {
+                    gateway: IP_ADDRESS,
+                    mask: Mask(24),
+                },
+                dhcp_enabled: true,
+                dns: Some(IP_ADDRESS),
+                secondary_dns: Some(IP_ADDRESS),
+            })),
+            ..NetifConfiguration::wifi_default_router()
+        })
+        .unwrap(),
+    )
+    .unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
     let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
@@ -127,13 +169,14 @@ fn main() -> Result<(), ()> {
     log::info!("Baseline readings completed");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
-    block_on(wifi::wifi_setup(
+    let hotspot_ip = block_on(wifi::wifi_setup(
         &mut wifi,
         nvs.clone(),
         ws2812.clone(),
         wifi_status.clone(),
     ))
-    .unwrap();
+    .unwrap()
+    .1;
     log::info!("WiFi Started");
     /*
        thread::Builder::new()
@@ -142,82 +185,179 @@ fn main() -> Result<(), ()> {
            .unwrap();
        log::info!("DNS Started");
     */
-    let server_configuration = esp_idf_svc::http::server::Configuration {
-        stack_size: 10240,
+    let arced_nvs = Arc::new(nvs.clone());
+    // let cloned_nvs_for_algo = Arc::new(nvs.clone());
 
-        ..Default::default()
+    // A little trick so as not to allocate the server on-stack, even temporarily
+    // Safe to do as `Server` is just a bunch of `MaybeUninit`s
+    let mut server = unsafe { Box::new_uninit().assume_init() };
+
+    // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
+    // Keep the handle alive so that the eventfd FS doesn't get unmounted
+    let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
+    let saved_algorithm: (f32, f32) =
+        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
+
+    log::info!("Server created");
+    let stack = edge_nal_std::Stack::new();
+    let server_future = run(
+        &mut server,
+        veml,
+        dark_baseline_reading,
+        baseline_reading,
+        wifi_status,
+        led_light,
+        arced_nvs,
+        &stack,
+        ws2812,
+        saved_algorithm,
+    );
+
+    if hotspot_ip.is_some() {
+        log::info!("Running with captive portal");
+        let mut tx_buf = [0; 1500];
+        let mut rx_buf = [0; 1500];
+        let captive_future = edge_captive::io::run(
+            &stack,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 53),
+            &mut tx_buf,
+            &mut rx_buf,
+            IP_ADDRESS,
+            Duration::from_secs(60),
+        );
+        let block_on_res = block_on(embassy_futures::join::join(server_future, captive_future));
+        match block_on_res.0 {
+            Ok(_) => (),
+            Err(e) => log::error!("Server error: {:?}", e),
+        };
+        match block_on_res.1 {
+            Ok(_) => (),
+            Err(e) => log::error!("Captive Portal error: {:?}", e),
+        };
+    } else {
+        log::info!("Running without captive portal");
+        match block_on(server_future) {
+            Ok(_) => (),
+            Err(e) => log::error!("block_on: {:?}", e),
+        };
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn run<'a>(
+    server: &mut WsServer,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    nvs: Arc<EspNvsPartition<NvsDefault>>,
+    stack: &edge_nal_std::Stack,
+    ws2812b: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: (f32, f32),
+) -> Result<(), anyhow::Error> {
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
+
+    log::info!("Running HTTP server on {addr}");
+
+    let acceptor = stack.bind(addr).await?;
+
+    let handler = WsHandler {
+        veml,
+        dark_baseline_reading,
+        baseline_reading,
+        wifi_status,
+        led_light,
+        nvs,
+        ws2812b,
+        saved_algorithm,
+    };
+    match server.run(None, acceptor, handler).await {
+        Ok(_) => (),
+        Err(e) => log::error!("server.run: {:?}", e),
     };
 
-    let mut server = EspHttpServer::new(&server_configuration).unwrap();
-    let cloned_nvs = Arc::new(nvs.clone());
-    let cloned_nvs_for_algo = Arc::new(nvs.clone());
+    Ok(())
+}
 
-    server
-        .fn_handler("/", Method::Get, |req| {
-            req.into_ok_response()?
-                .write_all(
-                    INDEX_HTML
-                        .replace(
-                            "{{VERSION}}",
-                            option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
-                        )
-                        .as_bytes(),
-                )
-                .map(|_| ())
-        })
-        .unwrap();
+#[derive(Debug)]
+enum WsHandlerError<C, W> {
+    Connection(C),
+    Ws(W),
+}
 
-    server
-        .fn_handler::<anyhow::Error, _>("/wifi", Method::Get, move |req| {
-            routes::wifi_route(req, cloned_nvs.clone())
-        })
-        .unwrap();
-    server
-        .fn_handler::<anyhow::Error, _>("/algorithm", Method::Get, move |req| {
-            routes::algorithm_route(req, cloned_nvs_for_algo.clone())
-        })
-        .unwrap();
+impl<C, W> From<C> for WsHandlerError<C, W> {
+    fn from(e: C) -> Self {
+        Self::Connection(e)
+    }
+}
 
-    #[cfg(feature = "ota")]
-    server
-        .fn_handler::<anyhow::Error, _>("/update", Method::Post, move |mut req| {
-            let mut ota = esp_ota::OtaUpdate::begin()?;
-            let mut update_buffer: Vec<u8> = vec![];
-            req.read(&mut update_buffer)?;
-            ota.write(&mut update_buffer)?;
-            let mut completed_update = ota.finalize()?;
-            completed_update.set_as_boot_partition()?;
-            log::info!("Update successful, restarting!");
-            completed_update.restart();
-        })
-        .unwrap();
-    #[cfg(feature = "ota")]
-    server
-        .fn_handler::<anyhow::Error, _>("/update", Method::Get, move |req| {
-            req.into_ok_response()?.write_all(UPDATE_HTML.as_bytes())?;
-            Ok(())
-        })
-        .unwrap();
+// Reduce the size of the future by using max 2 handler instead of 4
+// and by limiting the number of headers to 32 instead of 64
+type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
-    let cloned_nvs_for_ws = Arc::new(nvs.clone());
-    server
-        .ws_handler("/ws", move |ws: &mut EspHttpWsConnection| {
-            routes::ws_route(
-                ws,
-                cloned_nvs_for_ws.clone(),
-                dark_baseline_reading,
-                baseline_reading,
-                veml.clone(),
-                ws2812.clone(),
-                wifi_status.clone(),
-                led_light.clone(),
+struct WsHandler<'a> {
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    nvs: Arc<EspNvsPartition<NvsDefault>>,
+    ws2812b: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: (f32, f32),
+}
+
+impl Handler for WsHandler<'_> {
+    type Error<E>
+        = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
+    where
+        E: Debug;
+
+    async fn handle<T, const N: usize>(
+        &self,
+        _task_id: impl Display + Clone,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), Self::Error<T::Error>>
+    where
+        T: Read + Write,
+    {
+        let headers: &edge_http::RequestHeaders<'_, N> = conn.headers()?;
+
+        if headers.method != EdgeMethod::Get {
+            conn.initiate_response(405, Some("Method Not Allowed"), &[])
+                .await?;
+        } else if headers.path == "/" || headers.path.is_empty() {
+            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
+                .await?;
+            conn.write_all(
+                INDEX_HTML
+                    .replace(
+                        "{{VERSION}}",
+                        option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
+                    )
+                    .as_bytes(),
             )
-        })
-        .unwrap();
-
-    log::info!("Finished setup!");
-    loop {
-        FreeRtos.delay_ms(500u32);
+            .await?;
+        } else if headers.path.starts_with("/algorithm") {
+            WsHandler::algorithm_route(self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/wifi") {
+            WsHandler::wifi_route(self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/fallback") {
+            WsHandler::fallback_route(self, conn).await?;
+        } else if headers.path.starts_with("/ws") {
+            match WsHandler::ws_handler(self, conn).await {
+                Ok(_) => (),
+                Err(e) => {
+                    log::error!("WS Error: {:?}", e);
+                    return Err(e);
+                }
+            };
+        } else {
+            conn.initiate_response(404, Some("Not found"), &[]).await?;
+        }
+        Ok(())
     }
 }
 
