@@ -177,6 +177,27 @@ impl WsHandler<'_> {
             // if matches!(header.frame_type, FrameType::Ping) {
             //     header.frame_type = FrameType::Pong;
             // }
+            let mut recv_header = FrameHeader::recv(&mut socket)
+                .await
+                .map_err(WsHandlerError::Ws)?;
+            let payload = recv_header
+                .recv_payload(&mut socket, buf)
+                .await
+                .map_err(WsHandlerError::Ws)?;
+
+            recv_header.mask_key = None; // Servers never mask the payload
+
+            if matches!(recv_header.frame_type, FrameType::Ping) {
+                recv_header.frame_type = FrameType::Pong;
+            }
+            recv_header
+                .send(&mut socket)
+                .await
+                .map_err(WsHandlerError::Ws)?;
+            recv_header
+                .send_payload(&mut socket, payload)
+                .await
+                .map_err(WsHandlerError::Ws)?;
 
             let td_value = read_data(
                 self.veml.clone(),
@@ -202,7 +223,7 @@ impl WsHandler<'_> {
                 .send_payload(&mut socket, payload.as_ref())
                 .await
                 .map_err(WsHandlerError::Ws)?;
-            FreeRtos::delay_ms(500);
+            embassy_time::Timer::after_millis(500).await;
         }
 
         Ok(())
