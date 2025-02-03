@@ -3,26 +3,24 @@ use std::{
     collections::HashMap,
     str,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
 };
 
-use edge_http::io::{server::Connection, Error};
+use edge_http::io::server::Connection;
 use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
 use edge_ws::{FrameHeader, FrameType};
-use embedded_hal::{delay::DelayNs as _, pwm::SetDutyCycle};
+use embedded_hal::pwm::SetDutyCycle;
 use embedded_io_async::{Read, Write};
-use esp_idf_svc::{
-    hal::{delay::FreeRtos, i2c::I2cDriver, ledc::LedcDriver, reset},
-    nvs::{EspNvsPartition, NvsDefault},
-};
+use esp_idf_svc::hal::{i2c::I2cDriver, ledc::LedcDriver, reset};
 use log::error;
 use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers, serve_algo_setup_page, serve_wifi_setup_page,
+    helpers,
+    led::set_led,
+    serve_algo_setup_page, serve_wifi_setup_page,
     wifi::{self, WifiEnum},
-    EdgeError, WsHandler, WsHandlerError,
+    EdgeError, LedType, WsHandler, WsHandlerError,
 };
 
 impl WsHandler<'_> {
@@ -77,7 +75,7 @@ impl WsHandler<'_> {
                     .as_ref(),
                 )
                 .await?;
-                FreeRtos.delay_ms(50);
+                embassy_time::Timer::after_millis(50).await;
                 reset::restart();
             }
             Err(e) => {
@@ -92,7 +90,7 @@ impl WsHandler<'_> {
                 )
                 .await?;
                 error!("{:?}", e);
-                FreeRtos.delay_ms(50);
+                embassy_time::Timer::after_millis(50).await;
                 reset::restart();
             }
         };
@@ -142,17 +140,44 @@ impl WsHandler<'_> {
                     .as_ref(),
                 )
                 .await?;
+                #[allow(clippy::needless_return)]
                 return Ok(());
             }
             Err(e) => {
                 error!("{:?}", e);
-                FreeRtos.delay_ms(50);
+                embassy_time::Timer::after_millis(50).await;
                 reset::restart();
             }
         };
+        // Ok(())
     }
 }
 
+impl WsHandler<'_> {
+    pub async fn fallback_route<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        let data = read_data(
+            self.veml.clone(),
+            self.dark_baseline_reading,
+            self.baseline_reading,
+            self.wifi_status.clone(),
+            self.led_light.clone(),
+            self.ws2812b.clone(),
+            self.saved_algorithm,
+        )
+        .await
+        .unwrap_or_default();
+        conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
+            .await?;
+        conn.write_all(data.as_ref()).await?;
+        Ok(())
+    }
+}
 impl WsHandler<'_> {
     pub async fn ws_handler<T, const N: usize>(
         &self,
@@ -162,7 +187,6 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
         let mut buf = unsafe { Box::<[u8; 8192]>::new_uninit().assume_init() };
         let buf = buf.as_mut_slice();
         let resp_buf = &mut buf[..MAX_BASE64_KEY_RESPONSE_LEN];
@@ -205,7 +229,8 @@ impl WsHandler<'_> {
                 self.baseline_reading,
                 self.wifi_status.clone(),
                 self.led_light.clone(),
-                saved_algorithm,
+                self.ws2812b.clone(),
+                self.saved_algorithm,
             )
             .await;
             let payload = match td_value {
@@ -225,8 +250,6 @@ impl WsHandler<'_> {
                 .map_err(WsHandlerError::Ws)?;
             embassy_time::Timer::after_millis(500).await;
         }
-
-        Ok(())
     }
 }
 
@@ -236,6 +259,7 @@ async fn read_data(
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: (f32, f32),
 ) -> Option<String> {
     let reading = match veml.lock().unwrap().read_lux() {
@@ -249,22 +273,24 @@ async fn read_data(
     let ws_message: String;
     if reading / dark_baseline_reading > 0.8 {
         let wifi_stat = wifi_status.lock().unwrap();
-        // match *wifi_stat {
-        //     WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-        //     WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-        //     WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-        // }
+        match *wifi_stat {
+            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
+            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
+            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
+        }
         log::info!("No filament detected!");
         ws_message = "no_filament".to_string();
     } else {
         log::info!("Filament detected!");
-        let mut led = led_light.lock().unwrap();
-        if let Err(e) = led.set_duty_cycle_fully_on() {
-            log::error!("Failed to set LED duty cycle: {:?}", e);
-            return None;
+        set_led(ws2812.clone(), 0, 125, 125);
+        {
+            let mut led = led_light.lock().unwrap();
+            if let Err(e) = led.set_duty_cycle_fully_on() {
+                log::error!("Failed to set LED duty cycle: {:?}", e);
+                return None;
+            }
         }
-
-        FreeRtos::delay_ms(2); // Short delay before measuring again
+        embassy_time::Timer::after_millis(5).await; // Short delay before measuring again
         let reading = match veml.lock().unwrap().read_lux() {
             Ok(r) => r,
             Err(e) => {
@@ -276,12 +302,14 @@ async fn read_data(
         let td_value = (reading / baseline_reading) * 100.0;
         let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
         ws_message = adjusted_td_value.to_string();
-
-        if let Err(e) = led.set_duty(25) {
-            log::error!("Failed to adjust LED duty: {:?}", e);
+        {
+            let mut led = led_light.lock().unwrap();
+            if let Err(e) = led.set_duty(25) {
+                log::error!("Failed to adjust LED duty: {:?}", e);
+            }
         }
 
         log::info!("Reading: {}", td_value);
     }
-    return Some(ws_message);
+    Some(ws_message)
 }

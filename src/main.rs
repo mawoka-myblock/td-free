@@ -4,15 +4,14 @@ use core::fmt::{Debug, Display};
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use core::time::Duration;
 
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 use edge_http::io::server::Connection;
 use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
 use edge_http::io::Error as EdgeError;
-use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
-use edge_http::{Method as EdgeMethod, DEFAULT_MAX_HEADERS_COUNT};
+use edge_http::Method as EdgeMethod;
 use edge_nal::TcpBind;
-use edge_ws::{FrameHeader, FrameType};
 
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
@@ -22,9 +21,14 @@ use embedded_io_async::{Read, Write};
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
+use esp_idf_svc::ipv4::{
+    self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
+    DHCPClientSettings, Mask, RouterConfiguration, Subnet,
+};
+use esp_idf_svc::netif::{EspNetif, NetifConfiguration};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvsPartition, NvsDefault};
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
+use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{
@@ -35,13 +39,14 @@ use esp_idf_svc::{
     },
 };
 
+use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
+use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
+use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 
-// use wifi::get;
-// use esp_idf_svc::http::server::ws::EspHttpWsConnection;// mod dns;
 mod helpers;
-// mod led;
+mod led;
 mod routes;
 mod wifi;
 
@@ -53,6 +58,9 @@ static GIT_COMMIT_HASH: &str = env!("VERGEN_GIT_SHA");
 static GIT_DESCRIBE: &str = env!("VERGEN_GIT_DESCRIBE");
 static GIT_COMMIT_TIMESTAMP: &str = env!("VERGEN_GIT_COMMIT_TIMESTAMP");
 static GIT_COMMIT_AUTHOR_NAME: &str = env!("VERGEN_GIT_COMMIT_AUTHOR_NAME");
+
+pub const IP_ADDRESS: Ipv4Addr = Ipv4Addr::new(192, 168, 71, 1);
+pub type LedType<'a> = LedPixelEsp32Rmt<'static, RGB8, LedPixelColorGrb24>;
 
 fn main() -> Result<(), ()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
@@ -79,7 +87,7 @@ fn main() -> Result<(), ()> {
 
     let light_timer_driver = LedcTimerDriver::new(
         peripherals.ledc.timer1,
-        &TimerConfig::default().frequency(110.Hz().into()),
+        &TimerConfig::default().frequency(110.Hz()),
     )
     .unwrap();
     let led_light: Arc<Mutex<LedcDriver<'_>>> = Arc::new(Mutex::new(
@@ -92,6 +100,19 @@ fn main() -> Result<(), ()> {
     ));
 
     let rgb_led_channel = peripherals.rmt.channel0;
+    let ws2812: Arc<
+        Mutex<
+            LedPixelEsp32Rmt<
+                '_,
+                smart_leds::RGB<u8>,
+                ws2812_esp32_rmt_driver::driver::color::LedPixelColorImpl<3, 1, 0, 2, 255>,
+            >,
+        >,
+    > = Arc::new(Mutex::new(
+        LedType::new(rgb_led_channel, rgb_led_pin).unwrap(),
+    ));
+    let pixels = std::iter::repeat(RGB8::new(255, 255, 0)).take(1);
+    ws2812.lock().unwrap().write_nocopy(pixels).unwrap();
 
     let config = I2cConfig::new()
         .baudrate(20.kHz().into())
@@ -102,7 +123,35 @@ fn main() -> Result<(), ()> {
 
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let timer_service = EspTaskTimerService::new().unwrap();
-    let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    // let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    let wifi_raw_driver =
+        WifiDriver::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
+    let driver = EspWifi::wrap_all(
+        wifi_raw_driver,
+        EspNetif::new_with_conf(&NetifConfiguration {
+            ip_configuration: Some(IpConfiguration::Client(IpClientConfiguration::DHCP(
+                DHCPClientSettings {
+                    hostname: Some("tdfree".try_into().unwrap()),
+                },
+            ))),
+            ..NetifConfiguration::wifi_default_client()
+        })
+        .unwrap(),
+        EspNetif::new_with_conf(&NetifConfiguration {
+            ip_configuration: Some(ipv4::Configuration::Router(RouterConfiguration {
+                subnet: Subnet {
+                    gateway: IP_ADDRESS,
+                    mask: Mask(24),
+                },
+                dhcp_enabled: true,
+                dns: Some(IP_ADDRESS),
+                secondary_dns: Some(IP_ADDRESS),
+            })),
+            ..NetifConfiguration::wifi_default_router()
+        })
+        .unwrap(),
+    )
+    .unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
     let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
@@ -110,7 +159,7 @@ fn main() -> Result<(), ()> {
     FreeRtos.delay_ms(500);
     match veml.lock().unwrap().enable() {
         Ok(()) => (),
-        Err(_) => log::error!("VEML failed"),
+        Err(_) => led::show_veml_not_found_error(ws2812.clone()),
     };
 
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
@@ -120,12 +169,14 @@ fn main() -> Result<(), ()> {
     log::info!("Baseline readings completed");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
-    block_on(wifi::wifi_setup(
+    let hotspot_ip = block_on(wifi::wifi_setup(
         &mut wifi,
         nvs.clone(),
+        ws2812.clone(),
         wifi_status.clone(),
     ))
-    .unwrap();
+    .unwrap()
+    .1;
     log::info!("WiFi Started");
     /*
        thread::Builder::new()
@@ -144,10 +195,12 @@ fn main() -> Result<(), ()> {
     // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
     // Keep the handle alive so that the eventfd FS doesn't get unmounted
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
+    let saved_algorithm: (f32, f32) =
+        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
 
     log::info!("Server created");
-
-    match block_on(run(
+    let stack = edge_nal_std::Stack::new();
+    let server_future = run(
         &mut server,
         veml,
         dark_baseline_reading,
@@ -155,13 +208,44 @@ fn main() -> Result<(), ()> {
         wifi_status,
         led_light,
         arced_nvs,
-    )) {
-        Ok(_) => (),
-        Err(e) => log::error!("block_on: {:?}", e),
-    };
+        &stack,
+        ws2812,
+        saved_algorithm,
+    );
+
+    if hotspot_ip.is_some() {
+        log::info!("Running with captive portal");
+        let mut tx_buf = [0; 1500];
+        let mut rx_buf = [0; 1500];
+        let captive_future = edge_captive::io::run(
+            &stack,
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 53),
+            &mut tx_buf,
+            &mut rx_buf,
+            IP_ADDRESS,
+            Duration::from_secs(60),
+        );
+        let block_on_res = block_on(embassy_futures::join::join(server_future, captive_future));
+        match block_on_res.0 {
+            Ok(_) => (),
+            Err(e) => log::error!("Server error: {:?}", e),
+        };
+        match block_on_res.1 {
+            Ok(_) => (),
+            Err(e) => log::error!("Captive Portal error: {:?}", e),
+        };
+    } else {
+        log::info!("Running without captive portal");
+        match block_on(server_future) {
+            Ok(_) => (),
+            Err(e) => log::error!("block_on: {:?}", e),
+        };
+    }
+
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
     veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
@@ -170,12 +254,15 @@ pub async fn run<'a>(
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
+    stack: &edge_nal_std::Stack,
+    ws2812b: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: (f32, f32),
 ) -> Result<(), anyhow::Error> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
 
     log::info!("Running HTTP server on {addr}");
 
-    let acceptor = edge_nal_std::Stack::new().bind(addr).await?;
+    let acceptor = stack.bind(addr).await?;
 
     let handler = WsHandler {
         veml,
@@ -184,6 +271,8 @@ pub async fn run<'a>(
         wifi_status,
         led_light,
         nvs,
+        ws2812b,
+        saved_algorithm,
     };
     match server.run(None, acceptor, handler).await {
         Ok(_) => (),
@@ -216,6 +305,8 @@ struct WsHandler<'a> {
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
+    ws2812b: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: (f32, f32),
 }
 
 impl Handler for WsHandler<'_> {
@@ -237,7 +328,7 @@ impl Handler for WsHandler<'_> {
         if headers.method != EdgeMethod::Get {
             conn.initiate_response(405, Some("Method Not Allowed"), &[])
                 .await?;
-        } else if headers.path == "/" || headers.path == "" {
+        } else if headers.path == "/" || headers.path.is_empty() {
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
             conn.write_all(
@@ -250,11 +341,13 @@ impl Handler for WsHandler<'_> {
             )
             .await?;
         } else if headers.path.starts_with("/algorithm") {
-            WsHandler::algorithm_route(&self, headers.path, conn).await?;
+            WsHandler::algorithm_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/wifi") {
-            WsHandler::wifi_route(&self, headers.path, conn).await?;
+            WsHandler::wifi_route(self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/fallback") {
+            WsHandler::fallback_route(self, conn).await?;
         } else if headers.path.starts_with("/ws") {
-            match WsHandler::ws_handler(&self, conn).await {
+            match WsHandler::ws_handler(self, conn).await {
                 Ok(_) => (),
                 Err(e) => {
                     log::error!("WS Error: {:?}", e);
