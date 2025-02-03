@@ -6,11 +6,11 @@ use core::time::Duration;
 
 use std::sync::{Arc, Mutex};
 
+use edge_http::io::server::Connection;
 use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
 use edge_http::io::Error as EdgeError;
 use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
 use edge_http::{Method as EdgeMethod, DEFAULT_MAX_HEADERS_COUNT};
-use edge_http::io::server::Connection;
 use edge_nal::TcpBind;
 use edge_ws::{FrameHeader, FrameType};
 
@@ -22,7 +22,7 @@ use embedded_io_async::{Read, Write};
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::nvs::EspDefaultNvsPartition;
+use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvsPartition, NvsDefault};
 use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi};
 use esp_idf_svc::{
@@ -42,7 +42,7 @@ use wifi::WifiEnum;
 // use esp_idf_svc::http::server::ws::EspHttpWsConnection;// mod dns;
 mod helpers;
 // mod led;
-// mod routes;
+mod routes;
 mod wifi;
 
 static INDEX_HTML: &str = include_str!("index.html");
@@ -100,26 +100,24 @@ fn main() -> Result<(), ()> {
 
     let sysloop = EspSystemEventLoop::take().unwrap();
 
-
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let timer_service = EspTaskTimerService::new().unwrap();
     let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
-    // TODO: Commented out as I don't have the VEML thing
-    // let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
-    // led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
-    // FreeRtos.delay_ms(500);
-    // match veml.lock().unwrap().enable() {
-    //     Ok(()) => (),
-    //     Err(_) => log::error!("VEML failed"),
-    // };
+    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
+    led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
+    FreeRtos.delay_ms(500);
+    match veml.lock().unwrap().enable() {
+        Ok(()) => (),
+        Err(_) => log::error!("VEML failed"),
+    };
 
-    // let baseline_reading: f32 = take_baseline_reading(veml.clone());
-    // led_light.lock().unwrap().set_duty(25).unwrap();
-    // FreeRtos.delay_ms(200);
-    // let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
-    // log::info!("Baseline readings completed");
+    let baseline_reading: f32 = take_baseline_reading(veml.clone());
+    led_light.lock().unwrap().set_duty(25).unwrap();
+    FreeRtos.delay_ms(200);
+    let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
+    log::info!("Baseline readings completed");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
     block_on(wifi::wifi_setup(
@@ -136,17 +134,11 @@ fn main() -> Result<(), ()> {
            .unwrap();
        log::info!("DNS Started");
     */
-    // let server_configuration = esp_idf_svc::http::server::Configuration {
-    //     stack_size: 10240,
-
-    //     ..Default::default()
-    // };
-
-    // let cloned_nvs = Arc::new(nvs.clone());
+    let arced_nvs = Arc::new(nvs.clone());
     // let cloned_nvs_for_algo = Arc::new(nvs.clone());
 
     // A little trick so as not to allocate the server on-stack, even temporarily
-    // Safe to do as `Server` is just a bunch of `MaybeUninit`s    
+    // Safe to do as `Server` is just a bunch of `MaybeUninit`s
     let mut server = unsafe { Box::new_uninit().assume_init() };
 
     // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
@@ -155,23 +147,45 @@ fn main() -> Result<(), ()> {
 
     log::info!("Server created");
 
-    match block_on(run(&mut server)) {
+    match block_on(run(
+        &mut server,
+        veml,
+        dark_baseline_reading,
+        baseline_reading,
+        wifi_status,
+        led_light,
+        arced_nvs,
+    )) {
         Ok(_) => (),
         Err(e) => log::error!("block_on: {:?}", e),
     };
     Ok(())
 }
 
-pub async fn run(server: &mut WsServer) -> Result<(), anyhow::Error> {
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 8881));
+pub async fn run<'a>(
+    server: &mut WsServer,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    nvs: Arc<EspNvsPartition<NvsDefault>>,
+) -> Result<(), anyhow::Error> {
+    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
 
     log::info!("Running HTTP server on {addr}");
 
-    let acceptor = edge_nal_std::Stack::new()
-        .bind(addr)
-        .await?;
+    let acceptor = edge_nal_std::Stack::new().bind(addr).await?;
 
-    match server.run(None, acceptor, WsHandler).await {
+    let handler = WsHandler {
+        veml,
+        dark_baseline_reading,
+        baseline_reading,
+        wifi_status,
+        led_light,
+        nvs,
+    };
+    match server.run(None, acceptor, handler).await {
         Ok(_) => (),
         Err(e) => log::error!("server.run: {:?}", e),
     };
@@ -195,9 +209,16 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 // and by limiting the number of headers to 32 instead of 64
 type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
-struct WsHandler;
+struct WsHandler<'a> {
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    nvs: Arc<EspNvsPartition<NvsDefault>>,
+}
 
-impl Handler for WsHandler {
+impl Handler for WsHandler<'_> {
     type Error<E>
         = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
     where
@@ -211,87 +232,38 @@ impl Handler for WsHandler {
     where
         T: Read + Write,
     {
-        let headers = conn.headers()?;
+        let headers: &edge_http::RequestHeaders<'_, N> = conn.headers()?;
 
         if headers.method != EdgeMethod::Get {
             conn.initiate_response(405, Some("Method Not Allowed"), &[])
                 .await?;
-        } else if headers.path != "/" {
-            conn.initiate_response(404, Some("Not Found"), &[]).await?;
-        } else if !conn.is_ws_upgrade_request()? {
-            conn.initiate_response(200, Some("OK"), &[("Content-Type", "text/plain")])
+        } else if headers.path == "/" || headers.path == "" {
+            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
-
-            conn.write_all(b"Initiate WS Upgrade request to switch this connection to WS")
-                .await?;
+            conn.write_all(
+                INDEX_HTML
+                    .replace(
+                        "{{VERSION}}",
+                        option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
+                    )
+                    .as_bytes(),
+            )
+            .await?;
+        } else if headers.path.starts_with("/algorithm") {
+            WsHandler::algorithm_route(&self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/wifi") {
+            WsHandler::wifi_route(&self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/ws") {
+            match WsHandler::ws_handler(&self, conn).await {
+                Ok(_) => (),
+                Err(e) => {
+                    log::error!("WS Error: {:?}", e);
+                    return Err(e);
+                }
+            };
         } else {
-            // Get the buffer from heap or else your future size will be blown up 2x to 4x
-            // eating up A LOT of stack space
-            // The `new_uninit` trick is so as to make sure that the buffer is not allocated
-            // on-stack, even temporarily
-            // Save to do as we don't care about the initial content of the buffer
-            let mut buf = unsafe { Box::<[u8; 8192]>::new_uninit().assume_init() };
-            let buf = buf.as_mut_slice();
-
-            // Re-use a chunk of the buf here
-            let resp_buf = &mut buf [..MAX_BASE64_KEY_RESPONSE_LEN];
-            conn.initiate_ws_upgrade_response(resp_buf.try_into().unwrap()).await?;
-
-            conn.complete().await?;
-
-            log::info!("Connection upgraded to WS, starting a simple WS echo server now");
-
-            // Now we have the TCP socket in a state where it can be operated as a WS connection
-            // Run a simple WS echo server here
-
-            let mut socket = conn.unbind()?;
-
-            loop {
-                let mut header = FrameHeader::recv(&mut socket)
-                    .await
-                    .map_err(WsHandlerError::Ws)?;
-                let payload = header
-                    .recv_payload(&mut socket, buf)
-                    .await
-                    .map_err(WsHandlerError::Ws)?;
-
-                match header.frame_type {
-                    FrameType::Text(_) => {
-                        log::info!(
-                            "Got {header}, with payload \"{}\"",
-                            core::str::from_utf8(payload).unwrap()
-                        );
-                    }
-                    FrameType::Binary(_) => {
-                        log::info!("Got {header}, with payload {payload:?}");
-                    }
-                    FrameType::Close => {
-                        log::info!("Got {header}, client closed the connection cleanly");
-                        break;
-                    }
-                    _ => {
-                        log::info!("Got {header}");
-                    }
-                }
-
-                // Echo it back now
-
-                header.mask_key = None; // Servers never mask the payload
-
-                if matches!(header.frame_type, FrameType::Ping) {
-                    header.frame_type = FrameType::Pong;
-                }
-
-                log::info!("Echoing back as {header}");
-
-                header.send(&mut socket).await.map_err(WsHandlerError::Ws)?;
-                header
-                    .send_payload(&mut socket, payload)
-                    .await
-                    .map_err(WsHandlerError::Ws)?;
-            }
+            conn.initiate_response(404, Some("Not found"), &[]).await?;
         }
-
         Ok(())
     }
 }

@@ -39,6 +39,7 @@ url = "2.5"
 
 veml7700 = "0.2.0"
 embassy-time = { version = "0.4", features = ["log", "generic-queue-8"] }
+async-std = {version = "1.13"}
 
 [build-dependencies]
 embuild = {version = "0.33", features = ["espidf"]}
