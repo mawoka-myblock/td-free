@@ -14,7 +14,6 @@ use esp_idf_svc::{
 };
 use log::{info, warn};
 
-
 async fn wifi_client(
     ssid: &str,
     pass: &str,

@@ -203,7 +203,6 @@ impl WsHandler<'_> {
                 .await
                 .map_err(WsHandlerError::Ws)?;
             FreeRtos::delay_ms(500);
-            
         }
 
         Ok(())
