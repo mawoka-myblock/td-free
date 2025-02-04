@@ -25,7 +25,7 @@ jobs:
         id: extract_version
         run: |
           # Remove the "v" prefix if present
-          BASE_VERSION="${{ github.event.ref }}"
+          BASE_VERSION="${{ github.ref_name }}"
           VERSION=${BASE_VERSION#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_ENV
 
