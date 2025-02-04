@@ -25,7 +25,8 @@ jobs:
         id: extract_version
         run: |
           # Remove the "v" prefix if present
-          VERSION="${GITHUB_REF#refs/tags/v}"
+          BASE_VERSION="${{ github.event.ref }}"
+          VERSION=${BASE_VERSION#refs/tags/v}
           echo "version=$VERSION" >> $GITHUB_ENV
 
       - name: Update version in Cargo.toml
@@ -35,8 +36,8 @@ jobs:
           VERSION: ${{ env.version }}
 
       # fixes missing libclang error
-      - name: Setup | libncurses5
-        run: sudo apt-get install libncurses5
+      # - name: Setup | libncurses5
+      #   run: sudo apt-get install libncurses5
 
       - name: Setup | Rust
         uses: dtolnay/rust-toolchain@master
@@ -60,6 +61,8 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
         run: cargo binstall espflash --no-confirm
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
 
       # - name: Setup | ldproxy
       #   run: cargo install ldproxy   
