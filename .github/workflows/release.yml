@@ -67,7 +67,9 @@ jobs:
       # - name: Setup | ldproxy
       #   run: cargo install ldproxy   
       - name: Build | Compile (production)
-        run: cargo build --release
+        run: |
+          export VERSION=${{{ github.ref_name }}#v}
+          cargo build --release
         env:
           VERSION: ${{ env.version }}
 
