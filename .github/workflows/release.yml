@@ -74,7 +74,7 @@ jobs:
           VERSION: ${{ env.version }}
 
       - name: Merge Binary
-        run: espflash save-image --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
+        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
       - name: Release
         uses: softprops/action-gh-release@v2
         with:
