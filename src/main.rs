@@ -422,7 +422,9 @@ impl Handler for WsHandler<'_> {
             WsHandler::wifi_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/fallback") {
             WsHandler::fallback_route(self, conn).await?;
-        } else if headers.path.starts_with("/ws") {
+        } else if headers.path.starts_with("/averaged") {
+            WsHandler::averaged_reading_route(self, conn).await?;
+        }  else if headers.path.starts_with("/ws") {
             match WsHandler::ws_handler(self, conn).await {
                 Ok(_) => (),
                 Err(e) => {

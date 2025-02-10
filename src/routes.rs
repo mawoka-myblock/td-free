@@ -178,6 +178,32 @@ impl WsHandler<'_> {
         Ok(())
     }
 }
+
+impl WsHandler<'_> {
+    pub async fn averaged_reading_route<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        let data = read_averaged_data(
+            self.veml.clone(),
+            self.dark_baseline_reading,
+            self.baseline_reading,
+            self.wifi_status.clone(),
+            self.led_light.clone(),
+            self.ws2812b.clone(),
+            self.saved_algorithm,
+        )
+        .await
+        .unwrap_or_default();
+        conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
+            .await?;
+        conn.write_all(data.as_ref()).await?;
+        Ok(())
+    }
+}
 impl WsHandler<'_> {
     pub async fn ws_handler<T, const N: usize>(
         &self,
@@ -308,6 +334,75 @@ async fn read_data(
                 log::error!("Failed to adjust LED duty: {:?}", e);
             }
         }
+
+        log::info!("Reading: {}", td_value);
+    }
+    Some(ws_message)
+}
+
+const AVERAGE_SAMPLE_RATE: i32 = 30;
+const AVERAGE_SAMPLE_DELAY: u64 = 100;
+async fn read_averaged_data(
+    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'_>>>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    saved_algorithm: (f32, f32),
+) -> Option<String> {
+    let reading = match veml.lock().unwrap().read_lux() {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Failed to read sensor: {:?}", e);
+            return None;
+        }
+    };
+
+    let ws_message: String;
+    if reading / dark_baseline_reading > 0.8 {
+        let wifi_stat = wifi_status.lock().unwrap();
+        match *wifi_stat {
+            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
+            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
+            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
+        }
+        log::info!("No filament detected!");
+        ws_message = "no_filament".to_string();
+    } else {
+        log::info!("Filament detected!");
+        set_led(ws2812.clone(), 0, 125, 125);
+        {
+            let mut led = led_light.lock().unwrap();
+            if let Err(e) = led.set_duty_cycle_fully_on() {
+                log::error!("Failed to set LED duty cycle: {:?}", e);
+                return None;
+            }
+        }
+        embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
+        let mut readings_summed_up: f32 = 0.0;
+        let mut unlocked_veml = veml.lock().unwrap();
+        for _ in 0..AVERAGE_SAMPLE_RATE {
+            readings_summed_up += match unlocked_veml.read_lux() {
+                Ok(r) => r,
+                Err(e) => {
+                    log::error!("Failed to read sensor after LED activation: {:?}", e);
+                    return None;
+                }
+            };
+            embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
+        }
+        {
+            let mut led = led_light.lock().unwrap();
+            if let Err(e) = led.set_duty(25) {
+                log::error!("Failed to adjust LED duty: {:?}", e);
+            }
+        }
+        let reading = readings_summed_up / AVERAGE_SAMPLE_RATE as f32;
+        let td_value = (reading / baseline_reading) * 10.0;
+        let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
+        ws_message = adjusted_td_value.to_string();
+
 
         log::info!("Reading: {}", td_value);
     }
