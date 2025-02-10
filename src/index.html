@@ -62,6 +62,8 @@
 
         .fallback-btn {
             display: none;
+        }
+        .action-btn {
             margin: 10px auto;
             padding: 10px 20px;
             background-color: #00796b;
@@ -69,6 +71,13 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
+        }
+        .average-btn {
+            display: block;
+        }
+
+        #content {
+            text-align: center;
         }
     </style>
 </head>
@@ -78,7 +87,8 @@
         <h1>Td-Free</h1>
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
-        <button id="fallback-btn" class="fallback-btn" onclick="enableFallback()">Enable Fallback Mode</button>
+        <button id="fallback-btn" class="action-btn fallback-btn" onclick="enableFallback()">Enable Fallback Mode</button>
+        <button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged data</button>
         <div style="display: flex; flex-direction: column; margin-top: auto;">
             <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
             <p class="wifi-link" style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
@@ -91,6 +101,7 @@
         let intervalId;
         let fallbackInterval;
         let fallbackEnabled = false;
+        let showing_averaged = false
 
         function connectWebSocket() {
             socket = new WebSocket(`ws://${window.location.hostname}/ws`);
@@ -117,6 +128,7 @@
                 statusContainer.textContent = "Disconnected from WebSocket server";
                 statusContainer.classList.remove("connected");
                 clearInterval(intervalId);
+                if (showing_averaged) return
                 document.getElementById("fallback-btn").style.display = "block";
             });
 
@@ -124,6 +136,7 @@
                 statusContainer.textContent = "Error connecting to WebSocket server";
                 statusContainer.classList.remove("connected");
                 clearInterval(intervalId);
+                if (showing_averaged) return
                 document.getElementById("fallback-btn").style.display = "block";
             });
 
@@ -140,11 +153,52 @@
         }
 
         function fetchFallbackData() {
+            document.getElementById("status").textContent = "Loading fallback data";
             fetch("/fallback")
                 .then(response => response.text())
                 .then(data => updateContent(data))
                 .catch(() => {
                     document.getElementById("status").textContent = "Error fetching fallback data";
+                });
+                document.getElementById("status").textContent = "Showing fallback data";
+        }
+        function toggleAveragedData() {
+            const averagedBtn = document.getElementById("averaged-btn");
+            if (averagedBtn.textContent === "Show averaged data") {
+                statusContainer.classList.add("connected");
+                showing_averaged = true;
+                stopConnections();
+                setTimeout(fetchAveragedData, 800)
+                averagedBtn.textContent = "Go back to live mode";
+            } else {
+                showing_averaged = false;
+                averagedBtn.textContent = "Show averaged data";
+                connectWebSocket();
+            }
+        }
+
+        function stopConnections() {
+            if (socket) {
+                socket.close();
+            }
+            if (intervalId) {
+                clearInterval(intervalId);
+            }
+            if (fallbackInterval) {
+                clearInterval(fallbackInterval);
+            }
+        }
+
+        function fetchAveragedData() {
+            document.getElementById("status").textContent = "Loading averaged data";
+            fetch("/averaged")
+                .then(response => response.text())
+                .then(data => {
+                    updateContent(data);
+                    document.getElementById("status").textContent = "Showing averaged data";
+                })
+                .catch(() => {
+                    document.getElementById("status").textContent = "Error fetching averaged data";
                 });
         }
 
