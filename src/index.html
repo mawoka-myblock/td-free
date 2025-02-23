@@ -73,6 +73,7 @@
             border-radius: 5px;
             cursor: pointer;
         }
+
         .action-btn:disabled {
             pointer-events: none;
             opacity: 0.3;
@@ -176,8 +177,6 @@
                 stopConnections();
                 setTimeout(() => {
                     fetchAveragedData();
-                    averagedBtn.textContent = "Go back to live mode";
-                    averagedBtn.disabled = false
                 }, 850)
             }
         }
@@ -191,8 +190,11 @@
         function fetchAveragedData() {
             fetch("/averaged")
                 .then(response => response.text())
-                .then(data => { updateContent(data); document.getElementById("status").textContent = "Showing averaged data" })
-                .catch(() => document.getElementById("status").textContent = "Error fetching averaged data");
+                .then(data => {
+                    updateContent(data); document.getElementById("status").textContent = "Showing averaged data"; document.getElementById("averaged-btn").textContent = "Go back to live mode";
+                    document.getElementById("averaged-btn").disabled = false
+                })
+                .catch((e) => { document.getElementById("status").textContent = `Error: ${e}` });
         }
 
         function updateContent(data) {
