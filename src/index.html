@@ -206,8 +206,7 @@
                 el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
             }
         }
-
-        connectWebSocket();
+        setTimeout(connectWebSocket, 300)
 
     </script>
 </body>
