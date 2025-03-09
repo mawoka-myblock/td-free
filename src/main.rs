@@ -39,6 +39,7 @@ use esp_idf_svc::{
     },
 };
 
+use helpers::NvsData;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
@@ -195,7 +196,7 @@ fn main() -> Result<(), ()> {
     // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
     // Keep the handle alive so that the eventfd FS doesn't get unmounted
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    let saved_algorithm: (f32, f32) =
+    let saved_algorithm =
         helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
 
     log::info!("Server created");
@@ -256,7 +257,7 @@ pub async fn run<'a>(
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     stack: &edge_nal_std::Stack,
     ws2812b: Arc<Mutex<LedType<'a>>>,
-    saved_algorithm: (f32, f32),
+    saved_algorithm: NvsData,
 ) -> Result<(), anyhow::Error> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
 
@@ -306,7 +307,7 @@ struct WsHandler<'a> {
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     ws2812b: Arc<Mutex<LedType<'a>>>,
-    saved_algorithm: (f32, f32),
+    saved_algorithm: NvsData,
 }
 
 impl Handler for WsHandler<'_> {
@@ -348,7 +349,7 @@ impl Handler for WsHandler<'_> {
             WsHandler::fallback_route(self, conn).await?;
         } else if headers.path.starts_with("/averaged") {
             WsHandler::averaged_reading_route(self, conn).await?;
-        }  else if headers.path.starts_with("/ws") {
+        } else if headers.path.starts_with("/ws") {
             match WsHandler::ws_handler(self, conn).await {
                 Ok(_) => (),
                 Err(e) => {
@@ -371,11 +372,12 @@ fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
     )
 }
 
-fn serve_algo_setup_page(b_val: f32, m_val: f32) -> String {
+fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32) -> String {
     format!(
         include_str!("algorithm_setup.html"),
         b_val = b_val,
-        m_val = m_val
+        m_val = m_val,
+        threshold_val = threshold_val
     )
 }
 /*

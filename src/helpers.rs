@@ -2,12 +2,19 @@ use anyhow::bail;
 use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
 use log::warn;
 
-pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> (f32, f32) {
+#[derive(Debug, Clone, Copy)]
+pub struct NvsData {
+    pub b: f32,
+    pub m: f32,
+    pub threshold: f32
+}
+
+pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsData {
     let nvs = match EspNvs::new(nvs, "algo", true) {
         Ok(nvs) => nvs,
         Err(_) => {
             warn!("NVS init failed");
-            return (0., 1.);
+            return NvsData {b: 0.0, m: 1.0, threshold: 0.8};
         }
     };
     let mut b_val_buffer = vec![0; 256];
@@ -24,12 +31,20 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> (f32, 
         .flatten()
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(1.0);
-    (b_value, m_value)
+    let mut threshold_val_buffer = vec![0; 256];
+    let threshold_value = nvs
+        .get_str("threshold", &mut threshold_val_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(0.8);
+    NvsData {b: b_value, m: m_value, threshold: threshold_value}
 }
 
 pub fn save_algorithm_variables(
     b: &str,
     m: &str,
+    threshold: &str,
     nvs: EspNvsPartition<NvsDefault>,
 ) -> anyhow::Result<()> {
     let mut nvs = match EspNvs::new(nvs, "algo", true) {
@@ -41,5 +56,6 @@ pub fn save_algorithm_variables(
 
     nvs.set_str("m", m)?;
     nvs.set_str("b", b)?;
+    nvs.set_str("threshold", threshold)?;
     Ok(())
 }
