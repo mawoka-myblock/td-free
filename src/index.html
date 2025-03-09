@@ -206,7 +206,13 @@
                 el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
             }
         }
+
+        const start_fallback_if_ws_failed = () => {
+            if (socket.readyState === WebSocket.OPEN) return
+            startFallback()
+        }
         setTimeout(connectWebSocket, 300)
+        setTimeout(start_fallback_if_ws_failed, 1300)
 
     </script>
 </body>
