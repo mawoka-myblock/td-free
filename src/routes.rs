@@ -16,7 +16,7 @@ use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers,
+    helpers::{self, NvsData},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
     wifi::{self, WifiEnum},
@@ -110,11 +110,12 @@ impl WsHandler<'_> {
         let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         let m_value = url_params.get("m");
         let b_value = url_params.get("b");
-        if m_value.is_none() && b_value.is_none() {
+        let threshold_value = url_params.get("threshold");
+        if m_value.is_none() && b_value.is_none() && threshold_value.is_none() {
             let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
-            conn.write_all(serve_algo_setup_page(saved_algorithm.0, saved_algorithm.1).as_ref())
+            conn.write_all(serve_algo_setup_page(saved_algorithm.b, saved_algorithm.m, saved_algorithm.threshold).as_ref())
                 .await?;
             return Ok(());
         }
@@ -124,9 +125,13 @@ impl WsHandler<'_> {
         let mod_m_value = m_value
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned("1.0".to_string()));
+        let mod_threshold_value = threshold_value
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned("0.8".to_string()));
         match helpers::save_algorithm_variables(
             &mod_b_value,
             &mod_m_value,
+            &mod_threshold_value,
             self.nvs.as_ref().clone(),
         ) {
             Ok(_) => {
@@ -136,6 +141,7 @@ impl WsHandler<'_> {
                     serve_algo_setup_page(
                         mod_b_value.parse::<f32>().unwrap_or(0.0),
                         mod_m_value.parse::<f32>().unwrap_or(1.0),
+                        mod_threshold_value.parse::<f32>().unwrap_or(0.8)
                     )
                     .as_ref(),
                 )
@@ -286,7 +292,7 @@ async fn read_data(
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
-    saved_algorithm: (f32, f32),
+    saved_algorithm: NvsData,
 ) -> Option<String> {
     let reading = match veml.lock().unwrap().read_lux() {
         Ok(r) => r,
@@ -297,7 +303,7 @@ async fn read_data(
     };
 
     let ws_message: String;
-    if reading / dark_baseline_reading > 0.8 {
+    if reading / dark_baseline_reading > saved_algorithm.threshold {
         let wifi_stat = wifi_status.lock().unwrap();
         match *wifi_stat {
             WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
@@ -326,7 +332,7 @@ async fn read_data(
         };
 
         let td_value = (reading / baseline_reading) * 100.0;
-        let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
+        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         ws_message = adjusted_td_value.to_string();
         {
             let mut led = led_light.lock().unwrap();
@@ -349,7 +355,7 @@ async fn read_averaged_data(
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
-    saved_algorithm: (f32, f32),
+    saved_algorithm: NvsData,
 ) -> Option<String> {
     let reading = match veml.lock().unwrap().read_lux() {
         Ok(r) => r,
@@ -360,7 +366,7 @@ async fn read_averaged_data(
     };
 
     let ws_message: String;
-    if reading / dark_baseline_reading > 0.8 {
+    if reading / dark_baseline_reading > saved_algorithm.threshold {
         let wifi_stat = wifi_status.lock().unwrap();
         match *wifi_stat {
             WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
@@ -400,9 +406,8 @@ async fn read_averaged_data(
         }
         let reading = readings_summed_up / AVERAGE_SAMPLE_RATE as f32;
         let td_value = (reading / baseline_reading) * 10.0;
-        let adjusted_td_value = saved_algorithm.1 * td_value + saved_algorithm.0;
+        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         ws_message = adjusted_td_value.to_string();
-
 
         log::info!("Reading: {}", td_value);
     }
