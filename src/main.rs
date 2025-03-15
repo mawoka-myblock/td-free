@@ -84,7 +84,7 @@ fn main() -> Result<(), ()> {
 
     let i2c_sda = peripherals.pins.gpio8;
     let i2c_scl = peripherals.pins.gpio10;
-    let rgb_led_pin = peripherals.pins.gpio21;
+    let rgb_led_pin = peripherals.pins.gpio9;
 
     let light_timer_driver = LedcTimerDriver::new(
         peripherals.ledc.timer1,

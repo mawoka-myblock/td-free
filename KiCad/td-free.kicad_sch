@@ -6,7 +6,7 @@
 	(paper "A4")
 	(title_block
 		(title "Td-Free")
-		(rev "0")
+		(rev "1")
 	)
 	(lib_symbols
 		(symbol "2025-03-01_22-07-39:VEML3328"
@@ -3933,20 +3933,12 @@
 		(uuid "46a2730e-ca70-455e-9c02-51405ff6c20c")
 	)
 	(no_connect
-		(at 91.44 106.68)
-		(uuid "48a45a75-ef29-4a36-ac6a-e8277d092242")
-	)
-	(no_connect
 		(at 35.56 91.44)
 		(uuid "55c6304d-4317-48b4-bb41-a95d02470dd9")
 	)
 	(no_connect
 		(at 182.88 48.26)
 		(uuid "6620782f-c085-47a6-9c64-85568d360a40")
-	)
-	(no_connect
-		(at 91.44 109.22)
-		(uuid "6bd13732-ef6a-4960-acae-263079c0a411")
 	)
 	(no_connect
 		(at 91.44 83.82)
@@ -4462,6 +4454,16 @@
 	)
 	(wire
 		(pts
+			(xy 91.44 106.68) (xy 96.52 106.68)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "a3a28f57-1090-44aa-979b-6fe47b41fec9")
+	)
+	(wire
+		(pts
 			(xy 262.89 17.78) (xy 271.78 17.78)
 		)
 		(stroke
@@ -4612,6 +4614,16 @@
 	)
 	(wire
 		(pts
+			(xy 91.44 109.22) (xy 96.52 109.22)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "da166ac3-bc5c-4c36-8999-0c329d44f652")
+	)
+	(wire
+		(pts
 			(xy 109.22 176.53) (xy 109.22 179.07)
 		)
 		(stroke
@@ -4730,7 +4742,7 @@
 		)
 		(uuid "43d65c66-f5ae-4694-8674-811e6bdc4e31")
 	)
-	(label "SCL"
+	(label "SCL2"
 		(at 255.27 59.69 0)
 		(effects
 			(font
@@ -4750,7 +4762,7 @@
 		)
 		(uuid "55581bec-7c51-49d4-a42d-57dd7f7ee23b")
 	)
-	(label "SCL"
+	(label "SCL1"
 		(at 236.22 121.92 0)
 		(effects
 			(font
@@ -4760,7 +4772,7 @@
 		)
 		(uuid "5c9c486b-dce3-4233-add7-fe74dc9bafdb")
 	)
-	(label "SDA"
+	(label "SDA1"
 		(at 96.52 114.3 0)
 		(effects
 			(font
@@ -4770,7 +4782,7 @@
 		)
 		(uuid "61d88436-1161-4cb9-a331-ce1b79aba17c")
 	)
-	(label "SDA"
+	(label "SDA1"
 		(at 186.69 121.92 0)
 		(effects
 			(font
@@ -4780,7 +4792,17 @@
 		)
 		(uuid "61e7528f-0df8-415a-9b78-245f3fcaf07a")
 	)
-	(label "SDA"
+	(label "SCL2"
+		(at 96.52 106.68 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "6aa01d10-3062-431f-9a3f-8d1bd9acc67a")
+	)
+	(label "SDA2"
 		(at 257.81 57.15 0)
 		(effects
 			(font
@@ -4810,6 +4832,16 @@
 		)
 		(uuid "b3069f69-337f-49fe-a3b0-b23618f8a403")
 	)
+	(label "SDA2"
+		(at 96.52 109.22 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify left bottom)
+		)
+		(uuid "b340e766-fb2c-40c9-bf70-a5b2cf3e7b46")
+	)
 	(label "USB_D-"
 		(at 96.52 91.44 0)
 		(effects
@@ -4820,7 +4852,7 @@
 		)
 		(uuid "d23ee4ec-cf5f-4e45-8f92-72d3272c7530")
 	)
-	(label "SCL"
+	(label "SCL1"
 		(at 96.52 119.38 0)
 		(effects
 			(font
@@ -4842,7 +4874,7 @@
 			(fill
 				(type none)
 			)
-			(uuid 373006b8-9fea-437d-9350-e2edeafb80ed)
+			(uuid 2236e4ee-0d4a-42de-91be-56cd717c75ed)
 		)
 	)
 	(rule_area
@@ -4857,7 +4889,7 @@
 			(fill
 				(type none)
 			)
-			(uuid 9450cf26-e4bc-46a3-b3ac-2a72431f57ac)
+			(uuid 8157b7ab-7bfd-43ba-a58d-f9e0941ebeaf)
 		)
 	)
 	(symbol
