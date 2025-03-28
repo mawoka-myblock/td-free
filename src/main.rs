@@ -42,7 +42,6 @@ use esp_idf_svc::{
     },
 };
 
-use led::set_led;
 use helpers::NvsData;
 use led::set_led;
 use smart_leds::RGB8;
@@ -74,7 +73,10 @@ fn main() -> Result<(), ()> {
     esp_idf_svc::sys::link_patches();
 
     // Bind the log crate to the ESP Logging facilities
-    esp_idf_svc::log::EspLogger::initialize_default();
+    let logger = esp_idf_svc::log::EspLogger::new();
+    logger
+        .set_target_level("*", log::LevelFilter::Trace)
+        .unwrap();
     log::info!(
         "Basic init done. Built on {} with Rustc {} from Commit {}, described as \"{}\" and commited on {} by {}.",
         &BUILD_TIMESTAMP,
@@ -201,19 +203,18 @@ fn main() -> Result<(), ()> {
     // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
     // Keep the handle alive so that the eventfd FS doesn't get unmounted
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    let saved_algorithm =
-        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
+    let saved_algorithm = helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
     let server_future = run(
         &mut server,
-        veml,
+        veml.clone(),
         dark_baseline_reading,
         baseline_reading,
-        wifi_status,
-        led_light,
-        arced_nvs,
+        wifi_status.clone(),
+        led_light.clone(),
+        arced_nvs.clone(),
         &stack,
         ws2812.clone(),
         saved_algorithm,
@@ -230,7 +231,6 @@ fn main() -> Result<(), ()> {
     .unwrap();
     let mut exit_buffer = [0u8; 1];
     serial_driver.read(&mut exit_buffer, 500).unwrap();
-    let copied_ws = ws2812.clone();
     let serial_future = async move {
         if exit_buffer.iter().any(|&x| x == b'e') {
             drop(serial_driver);
@@ -238,7 +238,18 @@ fn main() -> Result<(), ()> {
             future::pending::<Result<(), anyhow::Error>>().await
         } else {
             log::warn!("Logging deactivated from now on, this is last log message!");
-            serial_connection(&mut serial_driver, copied_ws).await
+            logger.set_target_level("*", log::LevelFilter::Off).unwrap();
+            serial_connection(
+                &mut serial_driver,
+                veml,
+                dark_baseline_reading,
+                baseline_reading,
+                wifi_status,
+                led_light,
+                ws2812.clone(),
+                saved_algorithm,
+            )
+            .await
         }
     };
     // let serial_future = serial_connection(&mut serial_driver);
@@ -288,9 +299,15 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-pub async fn serial_connection(
+pub async fn serial_connection<'a>(
     conn: &mut UsbSerialDriver<'static>,
-    ws2812b: Arc<Mutex<LedType<'static>>>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    ws2812: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: NvsData,
 ) -> Result<(), anyhow::Error> {
     let mut buffer = [0u8; 64]; // Buffer for reading incoming data
 
@@ -304,20 +321,67 @@ pub async fn serial_connection(
         let received = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
 
         if received == "connect" {
-            set_led(ws2812b.clone(), 30, 30, 100);
+            set_led(ws2812.clone(), 30, 30, 100);
             // Step 2: Respond with "ready"
+            conn.write(b"ready\n", 100).unwrap();
+            conn.flush().unwrap();
             conn.write(b"ready\n", 100).unwrap();
             conn.flush().unwrap();
         }
 
         if received == "P" {
-            set_led(ws2812b.clone(), 100, 30, 255);
+            set_led(ws2812.clone(), 100, 30, 255);
             embassy_time::Timer::after_millis(500).await;
-            conn.write(b"lol", 100).unwrap();
-            for i in 0..5 {
-                let message = format!("uid,brand,type,name,{},color,owned,uuid\n", i);
+            loop {
+                let is_filament_inserted = routes::is_filament_inserted_dark(
+                    veml.clone(),
+                    dark_baseline_reading,
+                    saved_algorithm,
+                )
+                .await
+                .unwrap();
+                if !is_filament_inserted {
+                    embassy_time::Timer::after_millis(100).await;
+                    continue;
+                }
+                set_led(ws2812.clone(), 0, 125, 125);
+                embassy_time::Timer::after_millis(300).await;
+
+                let reading = routes::read_averaged_data(
+                    veml.clone(),
+                    dark_baseline_reading,
+                    baseline_reading,
+                    wifi_status.clone(),
+                    led_light.clone(),
+                    ws2812.clone(),
+                    saved_algorithm,
+                )
+                .await;
+
+                let message = format!(
+                    "uid,brand,type,name,{},color,owned,uuid\n",
+                    reading.unwrap_or("unknown".to_string())
+                );
+
                 conn.write(message.as_bytes(), 100).unwrap();
                 conn.flush().unwrap();
+                embassy_time::Timer::after_millis(300).await;
+                loop {
+                    embassy_time::Timer::after_millis(150).await;
+                    let is_filament_inserted = routes::is_filament_inserted_dark(
+                        veml.clone(),
+                        dark_baseline_reading,
+                        saved_algorithm,
+                    )
+                    .await
+                    .unwrap();
+                    if !is_filament_inserted {
+                        break;
+                    }
+                }
+                set_led(ws2812.clone(), 100, 30, 255);
+
+                embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
             }
         }
     }

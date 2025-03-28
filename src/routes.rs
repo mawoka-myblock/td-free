@@ -115,8 +115,15 @@ impl WsHandler<'_> {
             let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
-            conn.write_all(serve_algo_setup_page(saved_algorithm.b, saved_algorithm.m, saved_algorithm.threshold).as_ref())
-                .await?;
+            conn.write_all(
+                serve_algo_setup_page(
+                    saved_algorithm.b,
+                    saved_algorithm.m,
+                    saved_algorithm.threshold,
+                )
+                .as_ref(),
+            )
+            .await?;
             return Ok(());
         }
         let mod_b_value = b_value
@@ -141,7 +148,7 @@ impl WsHandler<'_> {
                     serve_algo_setup_page(
                         mod_b_value.parse::<f32>().unwrap_or(0.0),
                         mod_m_value.parse::<f32>().unwrap_or(1.0),
-                        mod_threshold_value.parse::<f32>().unwrap_or(0.8)
+                        mod_threshold_value.parse::<f32>().unwrap_or(0.8),
                     )
                     .as_ref(),
                 )
@@ -346,9 +353,24 @@ async fn read_data(
     Some(ws_message)
 }
 
+pub async fn is_filament_inserted_dark(
+    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    dark_baseline_reading: f32,
+    saved_algorithm: NvsData,
+) -> Result<bool, ()> {
+    let reading = match veml.lock().unwrap().read_lux() {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Failed to read sensor: {:?}", e);
+            return Err(());
+        }
+    };
+    Ok(!(reading / dark_baseline_reading > saved_algorithm.threshold))
+}
+
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 100;
-async fn read_averaged_data(
+pub async fn read_averaged_data(
     veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
