@@ -41,6 +41,7 @@ use esp_idf_svc::{
 
 use helpers::NvsData;
 use smart_leds::RGB8;
+use veml3328::VEML3328;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
 use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
@@ -49,6 +50,7 @@ use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 mod helpers;
 mod led;
 mod routes;
+mod veml3328;
 mod wifi;
 
 static INDEX_HTML: &str = include_str!("index.html");
@@ -155,7 +157,7 @@ fn main() -> Result<(), ()> {
     .unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
-    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(Veml7700::new(i2c)));
+    let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
     FreeRtos.delay_ms(500);
     match veml.lock().unwrap().enable() {
@@ -179,25 +181,13 @@ fn main() -> Result<(), ()> {
     .unwrap()
     .1;
     log::info!("WiFi Started");
-    /*
-       thread::Builder::new()
-           .stack_size(60 * 1024)
-           .spawn(|| smol_block_on(start_dns()).unwrap())
-           .unwrap();
-       log::info!("DNS Started");
-    */
-    let arced_nvs = Arc::new(nvs.clone());
-    // let cloned_nvs_for_algo = Arc::new(nvs.clone());
 
-    // A little trick so as not to allocate the server on-stack, even temporarily
-    // Safe to do as `Server` is just a bunch of `MaybeUninit`s
+    let arced_nvs = Arc::new(nvs.clone());
+
     let mut server = unsafe { Box::new_uninit().assume_init() };
 
-    // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
-    // Keep the handle alive so that the eventfd FS doesn't get unmounted
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    let saved_algorithm =
-        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
+    let saved_algorithm = helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
@@ -249,7 +239,7 @@ fn main() -> Result<(), ()> {
 #[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
-    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<VEML3328<I2cDriver<'a>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -300,7 +290,7 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
 struct WsHandler<'a> {
-    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<VEML3328<I2cDriver<'a>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -399,13 +389,14 @@ async fn start_dns() -> anyhow::Result<()> {
 }
      */
 
-fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
+fn take_baseline_reading(veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>) -> f32 {
     let mut max_reading: f32 = 0f32;
     let sample_count = 10;
     let sample_delay = 200u32;
 
     for _ in 0..sample_count {
-        let reading = match veml.lock().unwrap().read_lux() {
+        let mut locked_veml = veml.lock().unwrap();
+        let clr = match locked_veml.read_clear() {
             Ok(d) => d,
             Err(e) => {
                 log::error!("{:?}", e);
@@ -416,6 +407,11 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
                 continue;
             }
         };
+        // let r = locked_veml.read_red().unwrap();
+        // let g = locked_veml.read_green().unwrap();
+        // let b = locked_veml.read_blue().unwrap();
+        // log::info!("Base reading: Clr: {clr}, R: {r}, B: {b}, G: {g}");
+        let reading = clr as f32;
         log::info!("Reading: {}", reading.clone());
         max_reading += reading;
         FreeRtos.delay_ms(sample_delay);

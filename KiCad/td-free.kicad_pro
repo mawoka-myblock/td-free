@@ -239,28 +239,7 @@
     "equivalence_files": []
   },
   "erc": {
-    "erc_exclusions": [
-      [
-        "footprint_link_issues|1917700|1193800|de70a511-ce68-4783-a4f4-681c46c696d5|00000000-0000-0000-0000-000000000000|||",
-        ""
-      ],
-      [
-        "footprint_link_issues|2578100|368300|9a89d22f-a2ac-4ab0-bccf-389fbe80c3f4|00000000-0000-0000-0000-000000000000|||",
-        ""
-      ],
-      [
-        "lib_symbol_mismatch|1917700|1193800|de70a511-ce68-4783-a4f4-681c46c696d5|00000000-0000-0000-0000-000000000000|||",
-        ""
-      ],
-      [
-        "power_pin_not_driven|2006600|203200|7d5a304e-9967-4cb1-890e-a62e5f07758f|00000000-0000-0000-0000-000000000000|/029a7aea-43c9-4f1d-af51-7a1360dad1ba|/029a7aea-43c9-4f1d-af51-7a1360dad1ba|",
-        ""
-      ],
-      [
-        "power_pin_not_driven|635000|1270000|e7c4223c-fcb9-4c62-8905-15583f39bd58|00000000-0000-0000-0000-000000000000|/029a7aea-43c9-4f1d-af51-7a1360dad1ba|/029a7aea-43c9-4f1d-af51-7a1360dad1ba|",
-        ""
-      ]
-    ],
+    "erc_exclusions": [],
     "meta": {
       "version": 0
     },
@@ -547,7 +526,7 @@
       "plot": "/home/mawoka/Downloads/td-free-gerber/",
       "pos_files": "/home/mawoka/Downloads/td-free-placement/",
       "specctra_dsn": "",
-      "step": "td-free.step",
+      "step": "../../../Downloads/td-free.step",
       "svg": "",
       "vrml": "td-free.wrl"
     },

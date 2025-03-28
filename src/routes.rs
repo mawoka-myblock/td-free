@@ -19,6 +19,7 @@ use crate::{
     helpers::{self, NvsData},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
+    veml3328::VEML3328,
     wifi::{self, WifiEnum},
     EdgeError, LedType, WsHandler, WsHandlerError,
 };
@@ -115,8 +116,15 @@ impl WsHandler<'_> {
             let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
-            conn.write_all(serve_algo_setup_page(saved_algorithm.b, saved_algorithm.m, saved_algorithm.threshold).as_ref())
-                .await?;
+            conn.write_all(
+                serve_algo_setup_page(
+                    saved_algorithm.b,
+                    saved_algorithm.m,
+                    saved_algorithm.threshold,
+                )
+                .as_ref(),
+            )
+            .await?;
             return Ok(());
         }
         let mod_b_value = b_value
@@ -141,7 +149,7 @@ impl WsHandler<'_> {
                     serve_algo_setup_page(
                         mod_b_value.parse::<f32>().unwrap_or(0.0),
                         mod_m_value.parse::<f32>().unwrap_or(1.0),
-                        mod_threshold_value.parse::<f32>().unwrap_or(0.8)
+                        mod_threshold_value.parse::<f32>().unwrap_or(0.8),
                     )
                     .as_ref(),
                 )
@@ -286,7 +294,7 @@ impl WsHandler<'_> {
 }
 
 async fn read_data(
-    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -294,13 +302,19 @@ async fn read_data(
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
-    let reading = match veml.lock().unwrap().read_lux() {
-        Ok(r) => r,
+    let mut locked_veml = veml.lock().unwrap();
+    let clr = match locked_veml.read_clear() {
+        Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
             return None;
         }
     };
+    // let r = locked_veml.read_red().unwrap();
+    // let g = locked_veml.read_green().unwrap();
+    // let b = locked_veml.read_blue().unwrap();
+    // let reading = (clr * r * g * b) as f32;
+    let reading = clr as f32;
 
     let ws_message: String;
     if reading / dark_baseline_reading > saved_algorithm.threshold {
@@ -323,13 +337,18 @@ async fn read_data(
             }
         }
         embassy_time::Timer::after_millis(5).await; // Short delay before measuring again
-        let reading = match veml.lock().unwrap().read_lux() {
-            Ok(r) => r,
+        let clr = match locked_veml.read_clear() {
+            Ok(d) => d,
             Err(e) => {
-                log::error!("Failed to read sensor after LED activation: {:?}", e);
+                log::error!("Failed to read sensor: {:?}", e);
                 return None;
             }
         };
+        // let r = locked_veml.read_red().unwrap();
+        // let g = locked_veml.read_green().unwrap();
+        // let b = locked_veml.read_blue().unwrap();
+        // let reading = (clr * r * g * b) as f32;
+        let reading = clr as f32;
 
         let td_value = (reading / baseline_reading) * 100.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
@@ -349,7 +368,7 @@ async fn read_data(
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 100;
 async fn read_averaged_data(
-    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -357,13 +376,19 @@ async fn read_averaged_data(
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
-    let reading = match veml.lock().unwrap().read_lux() {
-        Ok(r) => r,
+    let mut locked_veml = veml.lock().unwrap();
+    let clr = match locked_veml.read_clear() {
+        Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
             return None;
         }
     };
+    // let r = locked_veml.read_red().unwrap();
+    // let g = locked_veml.read_green().unwrap();
+    // let b = locked_veml.read_blue().unwrap();
+    // let reading = (clr * r * g * b) as f32;
+    let reading = clr as f32;
 
     let ws_message: String;
     if reading / dark_baseline_reading > saved_algorithm.threshold {
@@ -387,15 +412,19 @@ async fn read_averaged_data(
         }
         embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
         let mut readings_summed_up: f32 = 0.0;
-        let mut unlocked_veml = veml.lock().unwrap();
         for _ in 0..AVERAGE_SAMPLE_RATE {
-            readings_summed_up += match unlocked_veml.read_lux() {
-                Ok(r) => r,
+            let clr = match locked_veml.read_clear() {
+                Ok(d) => d,
                 Err(e) => {
-                    log::error!("Failed to read sensor after LED activation: {:?}", e);
+                    log::error!("Failed to read sensor: {:?}", e);
                     return None;
                 }
             };
+            // let r = locked_veml.read_red().unwrap();
+            // let g = locked_veml.read_green().unwrap();
+            // let b = locked_veml.read_blue().unwrap();
+            // readings_summed_up += (clr * r * g * b) as f32;
+            readings_summed_up += clr as f32;
             embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
         }
         {
