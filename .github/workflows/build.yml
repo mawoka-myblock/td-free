@@ -1,7 +1,9 @@
-name: CI
+name: Build for commit
 
 on:
   push:
+  workflow_dispatch:
+  
     
     
 env:
