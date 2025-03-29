@@ -46,12 +46,6 @@ jobs:
           echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
           echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> "$GITHUB_ENV"
 
-      - name: Update version in Cargo.toml
-        run: |
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-        env:
-          VERSION: ${{ env.version }}
-
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
