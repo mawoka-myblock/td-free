@@ -65,9 +65,7 @@ jobs:
         run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
       - name: Install MinIO Client
         run: |
-          curl https://dl.min.io/client/mc/release/linux-amd64/mc \
-            --create-dirs \
-            -o $HOME/minio-binaries/mc
+          curl https://dl.min.io/client/mc/release/linux-amd64/mc --create-dirs -o $HOME/minio-binaries/mc
           chmod +x $HOME/minio-binaries/mc
       - name: Set MinIO Client Up
         run: |
