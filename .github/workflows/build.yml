@@ -61,11 +61,11 @@ jobs:
 
       - name: Build | Compile (production)
         run: |
-          BASE_VERSION="${{ github.ref_name }}"
-          export VERSION=${BASE_VERSION#v}
+          export VERSION=${BRANCH}@${SHA_SHORT}
           cargo build --release
         env:
-          VERSION: ${{ env.version }}
+          BRANCH: ${{ env.branch }}
+          SHA_SHORT: $${{ env.sha_short }}
 
       - name: Merge Binary
         run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
