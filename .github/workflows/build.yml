@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    
+    
+env:
+  rust_toolchain: stable
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    name: Compile
+    runs-on: ubuntu-22.04
+    env:
+      MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+
+    steps:
+      - name: Setup | Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2024-12-01
+          components: rustfmt, clippy
+      - name: Install Rust for Xtensa
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          version: "latest"
+          ldproxy: true
+      - name: Setup | Std
+        run: rustup component add rust-src --toolchain nightly-2024-12-01
+      - name: Setup | Checkout
+        uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+
+
+      - name: Extract Data
+        id: extract_version
+        run: |
+          # Remove the "v" prefix if present
+          BASE_VERSION="${{ github.ref_name }}"
+          VERSION=${BASE_VERSION#v}
+          echo "version=$VERSION" >> $GITHUB_ENV
+          echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
+          echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> "$GITHUB_ENV"
+
+      - name: Update version in Cargo.toml
+        run: |
+          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
+        env:
+          VERSION: ${{ env.version }}
+
+      - name: Install Cargo-Binstall
+        uses: cargo-bins/cargo-binstall@main
+      - name: Install ESPflash
+        run: cargo binstall espflash --no-confirm
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build | Compile (production)
+        run: |
+          BASE_VERSION="${{ github.ref_name }}"
+          export VERSION=${BASE_VERSION#v}
+          cargo build --release
+        env:
+          VERSION: ${{ env.version }}
+
+      - name: Merge Binary
+        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
+      - name: Install MinIO Client
+        run: |
+          curl https://dl.min.io/client/mc/release/linux-amd64/mc \
+            --create-dirs \
+            -o $HOME/minio-binaries/mc
+          chmod +x $HOME/minio-binaries/mc
+      - name: Set MinIO Client Up
+        run: |
+          mc alias set deploy $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      - name: Upload file
+        run: |
+          mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
+          mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest.bin
+
+
+      
