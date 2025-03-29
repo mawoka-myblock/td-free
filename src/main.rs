@@ -51,7 +51,6 @@ mod led;
 mod routes;
 mod wifi;
 
-static INDEX_HTML: &str = include_str!("index.html");
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -165,7 +164,7 @@ fn main() -> Result<(), ()> {
 
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
     led_light.lock().unwrap().set_duty(25).unwrap();
-    FreeRtos.delay_ms(200);
+    FreeRtos.delay_ms(400);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
     log::info!("Baseline readings completed");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
@@ -196,8 +195,7 @@ fn main() -> Result<(), ()> {
     // Mount the eventfd VFS subsystem or else `edge-nal-std` won't work
     // Keep the handle alive so that the eventfd FS doesn't get unmounted
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    let saved_algorithm =
-        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
+    let saved_algorithm = helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
@@ -330,17 +328,7 @@ impl Handler for WsHandler<'_> {
             conn.initiate_response(405, Some("Method Not Allowed"), &[])
                 .await?;
         } else if headers.path == "/" || headers.path.is_empty() {
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(
-                INDEX_HTML
-                    .replace(
-                        "{{VERSION}}",
-                        option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
-                    )
-                    .as_bytes(),
-            )
-            .await?;
+            WsHandler::server_index_page(self, conn).await?;
         } else if headers.path.starts_with("/algorithm") {
             WsHandler::algorithm_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/wifi") {
@@ -349,7 +337,13 @@ impl Handler for WsHandler<'_> {
             WsHandler::fallback_route(self, conn).await?;
         } else if headers.path.starts_with("/averaged") {
             WsHandler::averaged_reading_route(self, conn).await?;
-        } else if headers.path.starts_with("/ws") {
+        } else if headers.path.starts_with("/spoolman/set") {
+            WsHandler::spoolman_set_filament(self, headers.path, conn).await?;
+        }
+        /*else if headers.path.starts_with("/spoolman/filaments") {
+            WsHandler::spoolman_get_filaments(self, conn).await?;
+        } */
+        else if headers.path.starts_with("/ws") {
             match WsHandler::ws_handler(self, conn).await {
                 Ok(_) => (),
                 Err(e) => {
@@ -372,12 +366,13 @@ fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
     )
 }
 
-fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32) -> String {
+fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_val: &str) -> String {
     format!(
         include_str!("algorithm_setup.html"),
         b_val = b_val,
         m_val = m_val,
-        threshold_val = threshold_val
+        threshold_val = threshold_val,
+        spoolman_val = spoolman_val
     )
 }
 /*
