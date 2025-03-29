@@ -50,8 +50,6 @@ jobs:
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
         run: cargo binstall espflash --no-confirm
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
 
       - name: Build | Compile (production)
         run: |
@@ -69,15 +67,15 @@ jobs:
           chmod +x $HOME/minio-binaries/mc
       - name: Set MinIO Client Up
         run: |
-          $HOME/minio-binaries/mcmc alias set deploy $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+          $HOME/minio-binaries/mc alias set deploy $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
         env:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
       - name: Upload file
         run: |
-          $HOME/minio-binaries/mcmc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
-          $HOME/minio-binaries/mcmc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest.bin
+          $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
+          $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest.bin
 
 
       
