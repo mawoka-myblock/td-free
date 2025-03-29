@@ -329,7 +329,7 @@ impl Handler for WsHandler<'_> {
                 .await?;
         } else if headers.path == "/" || headers.path.is_empty() {
             WsHandler::server_index_page(self, conn).await?;
-        } else if headers.path.starts_with("/algorithm") {
+        } else if headers.path.starts_with("/settings") {
             WsHandler::algorithm_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/wifi") {
             WsHandler::wifi_route(self, headers.path, conn).await?;
@@ -368,7 +368,7 @@ fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
 
 fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_val: &str) -> String {
     format!(
-        include_str!("algorithm_setup.html"),
+        include_str!("settings.html"),
         b_val = b_val,
         m_val = m_val,
         threshold_val = threshold_val,
