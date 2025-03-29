@@ -51,7 +51,7 @@ jobs:
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
-        run: cargo binstall espflash --no-confirm
+        run: cargo binstall espflash --no-confirm --force
 
       - name: Build | Compile (production)
         run: |
