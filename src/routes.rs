@@ -19,7 +19,6 @@ use crate::{
     helpers::{self, NvsData},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
-    veml3328::VEML3328,
     wifi::{self, WifiEnum},
     EdgeError, LedType, WsHandler, WsHandlerError,
 };
@@ -294,7 +293,7 @@ impl WsHandler<'_> {
 }
 
 async fn read_data(
-    veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -303,7 +302,7 @@ async fn read_data(
     saved_algorithm: NvsData,
 ) -> Option<String> {
     let mut locked_veml = veml.lock().unwrap();
-    let clr = match locked_veml.read_clear() {
+    let clr = match locked_veml.read_lux() {
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
@@ -337,7 +336,7 @@ async fn read_data(
             }
         }
         embassy_time::Timer::after_millis(5).await; // Short delay before measuring again
-        let clr = match locked_veml.read_clear() {
+        let clr = match locked_veml.read_lux() {
             Ok(d) => d,
             Err(e) => {
                 log::error!("Failed to read sensor: {:?}", e);
@@ -368,7 +367,7 @@ async fn read_data(
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 100;
 async fn read_averaged_data(
-    veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -377,7 +376,7 @@ async fn read_averaged_data(
     saved_algorithm: NvsData,
 ) -> Option<String> {
     let mut locked_veml = veml.lock().unwrap();
-    let clr = match locked_veml.read_clear() {
+    let clr = match locked_veml.read_lux() {
         Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
@@ -413,7 +412,7 @@ async fn read_averaged_data(
         embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
         let mut readings_summed_up: f32 = 0.0;
         for _ in 0..AVERAGE_SAMPLE_RATE {
-            let clr = match locked_veml.read_clear() {
+            let clr = match locked_veml.read_lux() {
                 Ok(d) => d,
                 Err(e) => {
                     log::error!("Failed to read sensor: {:?}", e);

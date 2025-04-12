@@ -31,17 +31,11 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::{
-        delay::FreeRtos,
-        i2c::{I2cConfig, I2cDriver},
-        peripherals::Peripherals,
-        prelude::*,
-    },
+    hal::{delay::FreeRtos, i2c::I2cDriver, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::NvsData;
+use helpers::{initialize_veml, NvsData, Pins};
 use smart_leds::RGB8;
-use veml3328::VEML3328;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
 use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
@@ -84,10 +78,6 @@ fn main() -> Result<(), ()> {
 
     let peripherals = Peripherals::take().unwrap();
 
-    let i2c_sda = peripherals.pins.gpio8;
-    let i2c_scl = peripherals.pins.gpio10;
-    let rgb_led_pin = peripherals.pins.gpio9;
-
     let light_timer_driver = LedcTimerDriver::new(
         peripherals.ledc.timer1,
         &TimerConfig::default().frequency(110.Hz()),
@@ -102,8 +92,7 @@ fn main() -> Result<(), ()> {
         .unwrap(),
     ));
 
-    let rgb_led_channel = peripherals.rmt.channel0;
-    let ws2812: Arc<
+    let ws2812_old: Arc<
         Mutex<
             LedPixelEsp32Rmt<
                 '_,
@@ -112,16 +101,43 @@ fn main() -> Result<(), ()> {
             >,
         >,
     > = Arc::new(Mutex::new(
-        LedType::new(rgb_led_channel, rgb_led_pin).unwrap(),
+        LedType::new(peripherals.rmt.channel0, peripherals.pins.gpio21).unwrap(),
+    ));
+    let ws2812_new: Arc<
+        Mutex<
+            LedPixelEsp32Rmt<
+                '_,
+                smart_leds::RGB<u8>,
+                ws2812_esp32_rmt_driver::driver::color::LedPixelColorImpl<3, 1, 0, 2, 255>,
+            >,
+        >,
+    > = Arc::new(Mutex::new(
+        LedType::new(peripherals.rmt.channel1, peripherals.pins.gpio4).unwrap(),
     ));
     let pixels = std::iter::repeat(RGB8::new(255, 255, 0)).take(1);
-    ws2812.lock().unwrap().write_nocopy(pixels).unwrap();
-
-    let config = I2cConfig::new()
-        .baudrate(20.kHz().into())
-        .timeout(Duration::from_millis(100).into());
-    let i2c = I2cDriver::new(peripherals.i2c0, i2c_sda, i2c_scl, &config).unwrap();
-
+    ws2812_old.lock().unwrap().write_nocopy(pixels.clone()).unwrap();
+    ws2812_new.lock().unwrap().write_nocopy(pixels).unwrap();
+    let (veml, is_old_pcb) = initialize_veml(
+        Pins {
+            i2c: peripherals.i2c0,
+            sda1: peripherals.pins.gpio6,
+            scl1: peripherals.pins.gpio5,
+            sda2: peripherals.pins.gpio8,
+            scl2: peripherals.pins.gpio10,
+        },
+        ws2812_old.clone(),
+        ws2812_new.clone(),
+    );
+    let ws2812 = match is_old_pcb {
+        true => ws2812_old,
+        false => ws2812_new,
+    };
+    led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
+    // let i2c_scl_bb = PinDriver::output(peripherals.pins.gpio10).unwrap();
+    // let i2c_sda_bb = PinDriver::input_output(peripherals.pins.gpio8).unwrap();
+    // let timer_cfg = esp_idf_svc::hal::timer::config::Config{auto_reload: false, divider: 2, xtal: false};
+    // let i2c_clk_bb = TimerDriver::new(peripherals.timer00, &timer_cfg).unwrap();
+    // let i2c_color = bitbang_hal::i2c::I2cBB::new(i2c_scl_bb, i2c_sda_bb, i2c_clk_bb);
     let sysloop = EspSystemEventLoop::take().unwrap();
 
     let nvs = EspDefaultNvsPartition::take().unwrap();
@@ -157,14 +173,8 @@ fn main() -> Result<(), ()> {
     .unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
-    let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
-    led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
+    // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     FreeRtos.delay_ms(500);
-    match veml.lock().unwrap().enable() {
-        Ok(()) => (),
-        Err(_) => led::show_veml_not_found_error(ws2812.clone()),
-    };
-
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(200);
@@ -239,7 +249,7 @@ fn main() -> Result<(), ()> {
 #[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
-    veml: Arc<Mutex<VEML3328<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -290,7 +300,7 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
 struct WsHandler<'a> {
-    veml: Arc<Mutex<VEML3328<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -389,14 +399,14 @@ async fn start_dns() -> anyhow::Result<()> {
 }
      */
 
-fn take_baseline_reading(veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>>) -> f32 {
+fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
     let mut max_reading: f32 = 0f32;
     let sample_count = 10;
     let sample_delay = 200u32;
 
     for _ in 0..sample_count {
         let mut locked_veml = veml.lock().unwrap();
-        let clr = match locked_veml.read_clear() {
+        let clr = match locked_veml.read_lux() {
             Ok(d) => d,
             Err(e) => {
                 log::error!("{:?}", e);

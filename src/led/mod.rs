@@ -12,10 +12,11 @@ pub fn set_led(arced_led: Arc<Mutex<LedType>>, red: u8, green: u8, blue: u8) {
     led.write_nocopy(pixels).unwrap();
 }
 
-pub fn show_veml_not_found_error(arced_led: Arc<Mutex<LedType>>) {
+pub fn show_veml_not_found_error(arced_led_old: Arc<Mutex<LedType>>, arced_led_new: Arc<Mutex<LedType>>) {
     loop {
         log::error!("VEML7700 communication failed!");
-        set_led(arced_led.clone(), 255, 0, 0);
+        set_led(arced_led_old.clone(), 255, 0, 0);
+        set_led(arced_led_new.clone(), 255, 0, 0);
         FreeRtos.delay_ms(500u32);
     }
 }
