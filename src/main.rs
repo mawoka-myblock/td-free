@@ -329,7 +329,7 @@ pub async fn serial_connection<'a>(
             conn.flush().unwrap();
         }
 
-        if received == "P" {
+        if received == "P" || received == "HF" {
             set_led(ws2812.clone(), 100, 30, 255);
             embassy_time::Timer::after_millis(500).await;
             loop {
