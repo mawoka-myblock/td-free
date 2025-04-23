@@ -1,10 +1,12 @@
 #![feature(iter_intersperse)]
+#![feature(let_chains)]
 
 use core::fmt::{Debug, Display};
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use core::time::Duration;
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::{future, str};
 
@@ -311,69 +313,59 @@ pub async fn serial_connection<'a>(
     saved_algorithm: NvsData,
 ) -> Result<(), anyhow::Error> {
     let mut buffer = [0u8; 64]; // Buffer for reading incoming data
-    let mut recvd_buf: Vec<String> = vec![];
+    let trigger_measurement = Arc::new(AtomicBool::new(false));
+    let trigger_clone = trigger_measurement.clone();
     let channel = Channel::<NoopRawMutex, String, 1>::new();
     let recv = channel.receiver();
     let send = channel.sender();
     let conn_loop = async {
         loop {
             // Step 1: Wait for "connect\n" from Python script
-            embassy_time::Timer::after_millis(300).await;
+            if trigger_measurement.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(300).await;
+            } else {
+                embassy_time::Timer::after_millis(600).await;
+            }
 
             let n = match conn.read(&mut buffer, 50) {
                 Ok(n) if n > 0 => Some(n),
                 _ => None, // No data, continue looping
             };
-            if n.is_none() {
-                let data = recv.try_receive();
-                match data {
-                    Err(_) => continue,
-                    Ok(d) => {
-                        recvd_buf.push(format!("US: {}", d.trim()));
-                        conn.write(d.as_bytes(), 500).unwrap();
-                        conn.flush().unwrap();
-                        recv.clear();
+
+            if let Some(n) = n {
+                let received: &str = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
+
+                match received {
+                    "connect" => {
+                        conn.write(b"ready\n", 100).unwrap();
                     }
+                    "P" | "HF" => {
+                        trigger_measurement.store(true, Ordering::SeqCst);
+                        conn.write(b"connected to HF unlicensed\n", 100).unwrap();
+                    }
+                    "version" => {
+                        conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
+                    }
+                    _ => {}
                 }
-                continue;
-            }
-            // println!("Checked write_buf");
-
-            let received: &str = core::str::from_utf8(&buffer[..n.unwrap()])
-                .unwrap_or("")
-                .trim();
-            recvd_buf.push(received.to_string());
-
-            // println!("Received data");
-
-            if received == "connect" {
-                // set_led(ws2812.clone(), 30, 30, 100);
-                // Step 2: Respond with "ready"
-                conn.write(b"ready\n", 100).unwrap();
-                recvd_buf.push(format!("US: ready"));
-
                 conn.flush().unwrap();
-            }
-            if received == "P" || received == "HF" {
-                recvd_buf.push(format!("US: connected to HF licensed"));
-                conn.write(b"connected to HF unlicensed\n", 100).unwrap();
+            } else if trigger_measurement.load(Ordering::SeqCst)
+                && let Ok(msg) = recv.try_receive()
+            {
+                conn.write(msg.as_bytes(), 500).unwrap();
                 conn.flush().unwrap();
+                recv.clear();
             }
-            if received == "version" {
-                recvd_buf.push(format!("US: result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n"));
-                conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
-                conn.flush().unwrap();
-            }
-            if received == "printout" {
-                let msgs = recvd_buf.join("; ");
-                conn.write(msgs.as_bytes(), 500).unwrap();
-                conn.flush().unwrap();
-            }
+            continue;
         }
     };
     let measurement_loop = async {
-        set_led(ws2812.clone(), 100, 30, 255);
         loop {
+            if !trigger_clone.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(500).await;
+                continue;
+            }
+            set_led(ws2812.clone(), 100, 30, 255);
             let is_filament_inserted = routes::is_filament_inserted_dark(
                 veml.clone(),
                 dark_baseline_reading,
@@ -386,7 +378,6 @@ pub async fn serial_connection<'a>(
                 embassy_time::Timer::after_millis(300).await;
                 continue;
             }
-            set_led(ws2812.clone(), 0, 255, 50);
             embassy_time::Timer::after_millis(300).await;
 
             let reading = routes::read_averaged_data(
@@ -399,14 +390,13 @@ pub async fn serial_connection<'a>(
                 saved_algorithm,
             )
             .await;
+        set_led(ws2812.clone(), 255, 30, 255);
             let message = format!(
                 "{},,,,{},000000\n",
                 generate_random_11_digit_number(),
                 reading.unwrap()
             );
-            set_led(ws2812.clone(), 255, 0, 0);
             send.send(message).await;
-            set_led(ws2812.clone(), 0, 255, 0);
 
             embassy_time::Timer::after_millis(300).await;
             loop {
@@ -422,7 +412,6 @@ pub async fn serial_connection<'a>(
                     break;
                 }
             }
-            set_led(ws2812.clone(), 255, 30, 255);
 
             embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
         }
