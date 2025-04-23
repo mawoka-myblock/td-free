@@ -13,6 +13,8 @@ use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
 use edge_http::io::Error as EdgeError;
 use edge_http::Method as EdgeMethod;
 use edge_nal::TcpBind;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
 
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
@@ -42,7 +44,7 @@ use esp_idf_svc::{
     },
 };
 
-use helpers::NvsData;
+use helpers::{generate_random_11_digit_number, NvsData};
 use led::set_led;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
@@ -295,7 +297,6 @@ fn main() -> Result<(), ()> {
             Err(e) => log::error!("Serial error: {:?}", e),
         };
     }
-
     Ok(())
 }
 
@@ -310,29 +311,106 @@ pub async fn serial_connection<'a>(
     saved_algorithm: NvsData,
 ) -> Result<(), anyhow::Error> {
     let mut buffer = [0u8; 64]; // Buffer for reading incoming data
+    let mut recvd_buf: Vec<String> = vec![];
+    let channel = Channel::<NoopRawMutex, String, 1>::new();
+    let recv = channel.receiver();
+    let send = channel.sender();
+    let conn_loop = async {
+        loop {
+            // Step 1: Wait for "connect\n" from Python script
+            embassy_time::Timer::after_millis(300).await;
 
-    loop {
-        // Step 1: Wait for "connect\n" from Python script
-        let n = match conn.read(&mut buffer, 500) {
-            Ok(n) if n > 0 => n,
-            _ => continue, // No data, continue looping
-        };
+            let n = match conn.read(&mut buffer, 50) {
+                Ok(n) if n > 0 => Some(n),
+                _ => None, // No data, continue looping
+            };
+            if n.is_none() {
+                let data = recv.try_receive();
+                match data {
+                    Err(_) => continue,
+                    Ok(d) => {
+                        recvd_buf.push(format!("US: {}", d.trim()));
+                        conn.write(d.as_bytes(), 500).unwrap();
+                        conn.flush().unwrap();
+                        recv.clear();
+                    }
+                }
+                continue;
+            }
+            // println!("Checked write_buf");
 
-        let received = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
+            let received: &str = core::str::from_utf8(&buffer[..n.unwrap()])
+                .unwrap_or("")
+                .trim();
+            recvd_buf.push(received.to_string());
 
-        if received == "connect" {
-            set_led(ws2812.clone(), 30, 30, 100);
-            // Step 2: Respond with "ready"
-            conn.write(b"ready\n", 100).unwrap();
-            conn.flush().unwrap();
-            conn.write(b"ready\n", 100).unwrap();
-            conn.flush().unwrap();
+            // println!("Received data");
+
+            if received == "connect" {
+                // set_led(ws2812.clone(), 30, 30, 100);
+                // Step 2: Respond with "ready"
+                conn.write(b"ready\n", 100).unwrap();
+                recvd_buf.push(format!("US: ready"));
+
+                conn.flush().unwrap();
+            }
+            if received == "P" || received == "HF" {
+                recvd_buf.push(format!("US: connected to HF licensed"));
+                conn.write(b"connected to HF unlicensed\n", 100).unwrap();
+                conn.flush().unwrap();
+            }
+            if received == "version" {
+                recvd_buf.push(format!("US: result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n"));
+                conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
+                conn.flush().unwrap();
+            }
+            if received == "printout" {
+                let msgs = recvd_buf.join("; ");
+                conn.write(msgs.as_bytes(), 500).unwrap();
+                conn.flush().unwrap();
+            }
         }
+    };
+    let measurement_loop = async {
+        set_led(ws2812.clone(), 100, 30, 255);
+        loop {
+            let is_filament_inserted = routes::is_filament_inserted_dark(
+                veml.clone(),
+                dark_baseline_reading,
+                saved_algorithm,
+            )
+            .await
+            .unwrap();
+            // println!("Checking for filament");
+            if !is_filament_inserted {
+                embassy_time::Timer::after_millis(300).await;
+                continue;
+            }
+            set_led(ws2812.clone(), 0, 255, 50);
+            embassy_time::Timer::after_millis(300).await;
 
-        if received == "P" || received == "HF" {
-            set_led(ws2812.clone(), 100, 30, 255);
-            embassy_time::Timer::after_millis(500).await;
+            let reading = routes::read_averaged_data(
+                veml.clone(),
+                dark_baseline_reading,
+                baseline_reading,
+                wifi_status.clone(),
+                led_light.clone(),
+                ws2812.clone(),
+                saved_algorithm,
+            )
+            .await;
+            let message = format!(
+                "{},,,,{},000000\n",
+                generate_random_11_digit_number(),
+                reading.unwrap()
+            );
+            set_led(ws2812.clone(), 255, 0, 0);
+            send.send(message).await;
+            set_led(ws2812.clone(), 0, 255, 0);
+
+            embassy_time::Timer::after_millis(300).await;
             loop {
+                embassy_time::Timer::after_millis(150).await;
                 let is_filament_inserted = routes::is_filament_inserted_dark(
                     veml.clone(),
                     dark_baseline_reading,
@@ -341,50 +419,16 @@ pub async fn serial_connection<'a>(
                 .await
                 .unwrap();
                 if !is_filament_inserted {
-                    embassy_time::Timer::after_millis(100).await;
-                    continue;
+                    break;
                 }
-                set_led(ws2812.clone(), 0, 125, 125);
-                embassy_time::Timer::after_millis(300).await;
-
-                let reading = routes::read_averaged_data(
-                    veml.clone(),
-                    dark_baseline_reading,
-                    baseline_reading,
-                    wifi_status.clone(),
-                    led_light.clone(),
-                    ws2812.clone(),
-                    saved_algorithm,
-                )
-                .await;
-
-                let message = format!(
-                    "uid,brand,type,name,{},color,owned,uuid\n",
-                    reading.unwrap_or("unknown".to_string())
-                );
-
-                conn.write(message.as_bytes(), 100).unwrap();
-                conn.flush().unwrap();
-                embassy_time::Timer::after_millis(300).await;
-                loop {
-                    embassy_time::Timer::after_millis(150).await;
-                    let is_filament_inserted = routes::is_filament_inserted_dark(
-                        veml.clone(),
-                        dark_baseline_reading,
-                        saved_algorithm,
-                    )
-                    .await
-                    .unwrap();
-                    if !is_filament_inserted {
-                        break;
-                    }
-                }
-                set_led(ws2812.clone(), 100, 30, 255);
-
-                embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
             }
+            set_led(ws2812.clone(), 255, 30, 255);
+
+            embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
         }
-    }
+    };
+    embassy_futures::join::join(measurement_loop, conn_loop).await;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]

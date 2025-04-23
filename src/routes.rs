@@ -368,7 +368,7 @@ pub async fn is_filament_inserted_dark(
     Ok(!(reading / dark_baseline_reading > saved_algorithm.threshold))
 }
 
-const AVERAGE_SAMPLE_RATE: i32 = 30;
+const AVERAGE_SAMPLE_RATE: i32 = 10;
 const AVERAGE_SAMPLE_DELAY: u64 = 100;
 pub async fn read_averaged_data(
     veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
