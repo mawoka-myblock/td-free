@@ -40,6 +40,9 @@ embassy-futures = "0.1"
 async-std = {version = "1.13"}
 smart-leds = "*"
 ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
+embedded-svc = {version = "*"}
+serde = {version = "*"}
+serde_json = {version = "*"}
 
 [build-dependencies]
 embuild = {version = "0.33", features = ["espidf"]}
