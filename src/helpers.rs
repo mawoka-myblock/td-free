@@ -3,7 +3,7 @@ use esp_idf_svc::{
     nvs::{EspNvs, EspNvsPartition, NvsDefault},
     sys::esp_random,
 };
-use log::warn;
+use log::{error, info, warn};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NvsData {
@@ -73,4 +73,37 @@ pub fn generate_random_11_digit_number() -> u64 {
             return num;
         }
     }
+}
+
+pub fn save_spoolman_url(
+    url: &str,
+    nvs: EspNvsPartition<NvsDefault>,
+) -> anyhow::Result<()> {
+    let mut nvs = match EspNvs::new(nvs, "prefs", true) {
+        Ok(nvs) => nvs,
+        Err(_) => {
+            bail!("NVS failed");
+        }
+    };
+    info!("Saving Spoolman: {}", &url);
+    nvs.set_str("spoolman_url", url)?;
+    Ok(())
+}
+
+pub fn read_spoolman_url(
+    nvs: EspNvsPartition<NvsDefault>,
+) -> Option<String> {
+    let nvs = match EspNvs::new(nvs, "prefs", true) {
+        Ok(nvs) => nvs,
+        Err(_) => {
+            error!("NVS failed");
+            return None
+        }
+    };
+    info!("Reading spoolman URL!");
+
+    let mut spoolman_url_buf = vec![0; 256];
+    nvs.get_str("spoolman_url", &mut spoolman_url_buf)
+        .unwrap_or(None)
+        .map(|s| s.to_string())
 }

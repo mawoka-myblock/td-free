@@ -85,7 +85,7 @@ async fn wifi_client(
     Ok(())
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum WifiEnum {
     HotSpot,
     Connected,

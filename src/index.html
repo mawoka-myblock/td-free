@@ -60,10 +60,6 @@
             font-size: 3rem;
         }
 
-        .fallback-btn {
-            display: none;
-        }
-
         .action-btn {
             margin: 10px auto;
             padding: 10px 20px;
@@ -72,6 +68,7 @@
             border: none;
             border-radius: 5px;
             cursor: pointer;
+            display: block;
         }
 
         .action-btn:disabled {
@@ -79,12 +76,12 @@
             opacity: 0.3;
         }
 
-        .average-btn {
-            display: block;
-        }
-
         #content {
             text-align: center;
+        }
+
+        .hidden {
+            display: none;
         }
     </style>
 </head>
@@ -94,8 +91,8 @@
         <h1>Td-Free</h1>
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
-        <button id="fallback-btn" class="action-btn fallback-btn" onclick="enableFallback()">Enable Fallback
-            Mode</button>
+        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to
+            Spoolman</button>
         <button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged
             data</button>
         <div style="display: flex; flex-direction: column; margin-top: auto;">
@@ -111,6 +108,24 @@
         let fallbackInterval;
         let fallbackEnabled = false;
         let showing_averaged = false;
+        let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
+
+        function saveToSpoolman() {
+            const promted_id = prompt("Please enter the Spoolman Filament ID")
+            if (promted_id === "" || !promted_id) return
+            const id = parseInt(promted_id)
+            if (isNaN(id)) {
+                alert("Negative ID is impossible, not saving")
+                return
+            }
+            const el = document.getElementById("content");
+            const value = parseFloat(el.innerText)
+            if (isNaN(value)) {
+                alert("Td currently measured is not a number or filament is not inserted.")
+                return
+            }
+            window.location.assign(`/spoolman/set?filament_id=${id}&value=${value}`)
+        }
 
         function connectWebSocket() {
             socket = new WebSocket(`ws://${window.location.hostname}/ws`);
@@ -200,8 +215,12 @@
         function updateContent(data) {
             const el = document.getElementById("content");
             if (data === "no_filament") {
+                document.getElementById("save-to-spoolman-btn").classList.add("hidden")
                 el.innerText = "No filament inserted! Insert some";
             } else {
+                if (spoolman_available) {
+                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden")
+                }
                 const num = parseFloat(data);
                 el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
             }
