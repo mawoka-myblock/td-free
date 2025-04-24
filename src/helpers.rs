@@ -17,11 +17,7 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsDat
         Ok(nvs) => nvs,
         Err(_) => {
             warn!("NVS init failed");
-            return NvsData {
-                b: 0.0,
-                m: 1.0,
-                threshold: 0.8,
-            };
+            return NvsData {b: 0.0, m: 1.0, threshold: 0.8};
         }
     };
     let mut b_val_buffer = vec![0; 256];
@@ -45,11 +41,7 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsDat
         .flatten()
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(0.8);
-    NvsData {
-        b: b_value,
-        m: m_value,
-        threshold: threshold_value,
-    }
+    NvsData {b: b_value, m: m_value, threshold: threshold_value}
 }
 
 pub fn save_algorithm_variables(
