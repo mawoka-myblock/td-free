@@ -560,9 +560,24 @@ async fn read_data(
     Some(ws_message)
 }
 
-const AVERAGE_SAMPLE_RATE: i32 = 30;
+pub async fn is_filament_inserted_dark(
+    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    dark_baseline_reading: f32,
+    saved_algorithm: NvsData,
+) -> Result<bool, ()> {
+    let reading = match veml.lock().unwrap().read_lux() {
+        Ok(r) => r,
+        Err(e) => {
+            log::error!("Failed to read sensor: {:?}", e);
+            return Err(());
+        }
+    };
+    Ok(!(reading / dark_baseline_reading > saved_algorithm.threshold))
+}
+
+const AVERAGE_SAMPLE_RATE: i32 = 10;
 const AVERAGE_SAMPLE_DELAY: u64 = 100;
-async fn read_averaged_data(
+pub async fn read_averaged_data(
     veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,

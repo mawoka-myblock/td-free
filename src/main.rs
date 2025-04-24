@@ -1,17 +1,22 @@
 #![feature(iter_intersperse)]
+#![feature(let_chains)]
 
 use core::fmt::{Debug, Display};
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use core::time::Duration;
 
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use std::{future, str};
 
 use edge_http::io::server::Connection;
 use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
 use edge_http::io::Error as EdgeError;
 use edge_http::Method as EdgeMethod;
 use edge_nal::TcpBind;
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
 
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
@@ -21,6 +26,8 @@ use embedded_io_async::{Read, Write};
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
+use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
+use esp_idf_svc::io::Write as ioWrite;
 use esp_idf_svc::ipv4::{
     self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
     DHCPClientSettings, Mask, RouterConfiguration, Subnet,
@@ -39,7 +46,8 @@ use esp_idf_svc::{
     },
 };
 
-use helpers::NvsData;
+use helpers::{generate_random_11_digit_number, NvsData};
+use led::set_led;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
@@ -68,7 +76,10 @@ fn main() -> Result<(), ()> {
     esp_idf_svc::sys::link_patches();
 
     // Bind the log crate to the ESP Logging facilities
-    esp_idf_svc::log::EspLogger::initialize_default();
+    let logger = esp_idf_svc::log::EspLogger::new();
+    logger
+        .set_target_level("*", log::LevelFilter::Trace)
+        .unwrap();
     log::info!(
         "Basic init done. Built on {} with Rustc {} from Commit {}, described as \"{}\" and commited on {} by {}.",
         &BUILD_TIMESTAMP,
@@ -201,16 +212,50 @@ fn main() -> Result<(), ()> {
     let stack = edge_nal_std::Stack::new();
     let server_future = run(
         &mut server,
-        veml,
+        veml.clone(),
         dark_baseline_reading,
         baseline_reading,
-        wifi_status,
-        led_light,
-        arced_nvs,
+        wifi_status.clone(),
+        led_light.clone(),
+        arced_nvs.clone(),
         &stack,
-        ws2812,
+        ws2812.clone(),
         saved_algorithm,
     );
+    log::warn!(
+        "Activating serial connection, hold e to keep viewing logs and disable serial interface!!!"
+    );
+    let mut serial_driver = UsbSerialDriver::new(
+        peripherals.usb_serial,
+        peripherals.pins.gpio18,
+        peripherals.pins.gpio19,
+        &UsbSerialConfig::new(),
+    )
+    .unwrap();
+    let mut exit_buffer = [0u8; 1];
+    serial_driver.read(&mut exit_buffer, 500).unwrap();
+    let serial_future = async move {
+        if exit_buffer.iter().any(|&x| x == b'e') {
+            drop(serial_driver);
+            log::info!("Logging reactivated!");
+            future::pending::<Result<(), anyhow::Error>>().await
+        } else {
+            log::warn!("Logging deactivated from now on, this is last log message!");
+            logger.set_target_level("*", log::LevelFilter::Off).unwrap();
+            serial_connection(
+                &mut serial_driver,
+                veml,
+                dark_baseline_reading,
+                baseline_reading,
+                wifi_status,
+                led_light,
+                ws2812.clone(),
+                saved_algorithm,
+            )
+            .await
+        }
+    };
+    // let serial_future = serial_connection(&mut serial_driver);
 
     if hotspot_ip.is_some() {
         log::info!("Running with captive portal");
@@ -224,7 +269,11 @@ fn main() -> Result<(), ()> {
             IP_ADDRESS,
             Duration::from_secs(60),
         );
-        let block_on_res = block_on(embassy_futures::join::join(server_future, captive_future));
+        let block_on_res = block_on(embassy_futures::join::join3(
+            server_future,
+            captive_future,
+            serial_future,
+        ));
         match block_on_res.0 {
             Ok(_) => (),
             Err(e) => log::error!("Server error: {:?}", e),
@@ -233,14 +282,140 @@ fn main() -> Result<(), ()> {
             Ok(_) => (),
             Err(e) => log::error!("Captive Portal error: {:?}", e),
         };
+        match block_on_res.2 {
+            Ok(_) => log::info!("Logging reactivated!"),
+            Err(e) => log::error!("Serial error: {:?}", e),
+        };
     } else {
         log::info!("Running without captive portal");
-        match block_on(server_future) {
+        let block_on_res = block_on(embassy_futures::join::join(server_future, serial_future));
+        match block_on_res.0 {
             Ok(_) => (),
-            Err(e) => log::error!("block_on: {:?}", e),
+            Err(e) => log::error!("Server error: {:?}", e),
+        };
+        match block_on_res.1 {
+            Ok(_) => log::info!("Logging reactivated!"),
+            Err(e) => log::error!("Serial error: {:?}", e),
         };
     }
+    Ok(())
+}
 
+pub async fn serial_connection<'a>(
+    conn: &mut UsbSerialDriver<'static>,
+    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'a>>>,
+    ws2812: Arc<Mutex<LedType<'a>>>,
+    saved_algorithm: NvsData,
+) -> Result<(), anyhow::Error> {
+    let mut buffer = [0u8; 64]; // Buffer for reading incoming data
+    let trigger_measurement = Arc::new(AtomicBool::new(false));
+    let trigger_clone = trigger_measurement.clone();
+    let channel = Channel::<NoopRawMutex, String, 1>::new();
+    let recv = channel.receiver();
+    let send = channel.sender();
+    let conn_loop = async {
+        loop {
+            // Step 1: Wait for "connect\n" from Python script
+            if trigger_measurement.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(300).await;
+            } else {
+                embassy_time::Timer::after_millis(600).await;
+            }
+
+            let n = match conn.read(&mut buffer, 50) {
+                Ok(n) if n > 0 => Some(n),
+                _ => None, // No data, continue looping
+            };
+
+            if let Some(n) = n {
+                let received: &str = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
+
+                match received {
+                    "connect" => {
+                        conn.write(b"ready\n", 100).unwrap();
+                    }
+                    "P" | "HF" => {
+                        trigger_measurement.store(true, Ordering::SeqCst);
+                        conn.write(b"connected to HF unlicensed\n", 100).unwrap();
+                    }
+                    "version" => {
+                        conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
+                    }
+                    _ => {}
+                }
+                conn.flush().unwrap();
+            } else if trigger_measurement.load(Ordering::SeqCst)
+                && let Ok(msg) = recv.try_receive()
+            {
+                conn.write(msg.as_bytes(), 500).unwrap();
+                conn.flush().unwrap();
+                recv.clear();
+            }
+            continue;
+        }
+    };
+    let measurement_loop = async {
+        loop {
+            if !trigger_clone.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(500).await;
+                continue;
+            }
+            set_led(ws2812.clone(), 100, 30, 255);
+            let is_filament_inserted = routes::is_filament_inserted_dark(
+                veml.clone(),
+                dark_baseline_reading,
+                saved_algorithm,
+            )
+            .await
+            .unwrap();
+            // println!("Checking for filament");
+            if !is_filament_inserted {
+                embassy_time::Timer::after_millis(300).await;
+                continue;
+            }
+            embassy_time::Timer::after_millis(300).await;
+
+            let reading = routes::read_averaged_data(
+                veml.clone(),
+                dark_baseline_reading,
+                baseline_reading,
+                wifi_status.clone(),
+                led_light.clone(),
+                ws2812.clone(),
+                saved_algorithm,
+            )
+            .await;
+        set_led(ws2812.clone(), 255, 30, 255);
+            let message = format!(
+                "{},,,,{},000000\n",
+                generate_random_11_digit_number(),
+                reading.unwrap()
+            );
+            send.send(message).await;
+
+            embassy_time::Timer::after_millis(300).await;
+            loop {
+                embassy_time::Timer::after_millis(150).await;
+                let is_filament_inserted = routes::is_filament_inserted_dark(
+                    veml.clone(),
+                    dark_baseline_reading,
+                    saved_algorithm,
+                )
+                .await
+                .unwrap();
+                if !is_filament_inserted {
+                    break;
+                }
+            }
+
+            embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
+        }
+    };
+    embassy_futures::join::join(measurement_loop, conn_loop).await;
     Ok(())
 }
 
@@ -375,24 +550,6 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
         spoolman_val = spoolman_val
     )
 }
-/*
-async fn start_dns() -> anyhow::Result<()> {
-    let stack = edge_nal_std::Stack::new();
-    let mut tx = [0; 1500];
-    let mut rx = [0; 1500];
-
-    edge_captive::io::run(
-        &stack,
-        std::net::SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 53)),
-        &mut tx,
-        &mut rx,
-        Ipv4Addr::new(192, 168, 71, 1),
-        Duration::from_secs(60),
-    )
-    .await?;
-    Ok(())
-}
-     */
 
 fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
     let mut max_reading: f32 = 0f32;

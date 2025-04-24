@@ -1,12 +1,15 @@
 use anyhow::bail;
-use esp_idf_svc::nvs::{EspNvs, EspNvsPartition, NvsDefault};
+use esp_idf_svc::{
+    nvs::{EspNvs, EspNvsPartition, NvsDefault},
+    sys::esp_random,
+};
 use log::{error, info, warn};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NvsData {
     pub b: f32,
     pub m: f32,
-    pub threshold: f32
+    pub threshold: f32,
 }
 
 pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsData {
@@ -60,6 +63,17 @@ pub fn save_algorithm_variables(
     Ok(())
 }
 
+pub fn generate_random_11_digit_number() -> u64 {
+    loop {
+        let high: u64 = unsafe { esp_random() } as u64;
+        let low: u64 = unsafe { esp_random() } as u64;
+        let num = ((high << 32) | low) % 100_000_000_000;
+
+        if num >= 10_000_000_000 {
+            return num;
+        }
+    }
+}
 
 pub fn save_spoolman_url(
     url: &str,
