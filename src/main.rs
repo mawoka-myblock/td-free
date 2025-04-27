@@ -390,10 +390,11 @@ pub async fn serial_connection<'a>(
             )
             .await;
         set_led(ws2812.clone(), 255, 30, 255);
+        let reading_float = reading.unwrap().parse::<f32>().unwrap();
             let message = format!(
-                "{},,,,{},000000\n",
+                "{},,,,{:.1},000000\n",
                 generate_random_11_digit_number(),
-                reading.unwrap()
+                reading_float
             );
             send.send(message).await;
 
