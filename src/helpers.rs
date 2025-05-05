@@ -24,10 +24,7 @@ use esp_idf_svc::{
 };
 use veml7700::Veml7700;
 
-use crate::{
-    led,
-    LedType,
-};
+use crate::{led, LedType};
 use esp_idf_svc::hal::prelude::*;
 
 pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsData {
@@ -63,7 +60,11 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsDat
         .flatten()
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(0.8);
-    NvsData {b: b_value, m: m_value, threshold: threshold_value}
+    NvsData {
+        b: b_value,
+        m: m_value,
+        threshold: threshold_value,
+    }
 }
 
 pub fn save_algorithm_variables(
@@ -97,10 +98,7 @@ pub fn generate_random_11_digit_number() -> u64 {
     }
 }
 
-pub fn save_spoolman_url(
-    url: &str,
-    nvs: EspNvsPartition<NvsDefault>,
-) -> anyhow::Result<()> {
+pub fn save_spoolman_data(url: &str, field_name: &str,nvs: EspNvsPartition<NvsDefault>) -> anyhow::Result<()> {
     let mut nvs = match EspNvs::new(nvs, "prefs", true) {
         Ok(nvs) => nvs,
         Err(_) => {
@@ -109,25 +107,31 @@ pub fn save_spoolman_url(
     };
     info!("Saving Spoolman: {}", &url);
     nvs.set_str("spoolman_url", url)?;
+    nvs.set_str("spoolman_field_name", field_name)?;
     Ok(())
 }
 
-pub fn read_spoolman_url(
-    nvs: EspNvsPartition<NvsDefault>,
-) -> Option<String> {
+pub fn read_spoolman_data(nvs: EspNvsPartition<NvsDefault>) -> (Option<String>, Option<String>) {
     let nvs = match EspNvs::new(nvs, "prefs", true) {
         Ok(nvs) => nvs,
         Err(_) => {
             error!("NVS failed");
-            return None
+            return (None, None);
         }
     };
     info!("Reading spoolman URL!");
 
     let mut spoolman_url_buf = vec![0; 256];
-    nvs.get_str("spoolman_url", &mut spoolman_url_buf)
+    let url = nvs
+        .get_str("spoolman_url", &mut spoolman_url_buf)
         .unwrap_or(None)
-        .map(|s| s.to_string())
+        .map(|s| s.to_string());
+    let mut spoolman_field_name_buf = vec![0; 256];
+    let field_name = nvs
+        .get_str("spoolman_field_name", &mut spoolman_field_name_buf)
+        .unwrap_or(None)
+        .map(|s| s.to_string());
+    (url, field_name)
 }
 
 pub struct Pins {
@@ -156,7 +160,10 @@ pub fn initialize_veml(
     if i2c_0.is_err() {
         info!("Trying alt i2c before veml enable");
         drop(i2c_0.unwrap());
-        return (init_alt_i2c(pins.sda2,pins.scl2, pins.i2c, ws2812_old, ws2812_new), true);
+        return (
+            init_alt_i2c(pins.sda2, pins.scl2, pins.i2c, ws2812_old, ws2812_new),
+            true,
+        );
     }
     let mut veml_temp = Veml7700::new(i2c_0.unwrap());
 
@@ -164,7 +171,10 @@ pub fn initialize_veml(
     if veml_enable_res.is_err() {
         drop(veml_temp.destroy());
         info!("Trying alt i2c after veml enable");
-        return (init_alt_i2c(pins.sda2,pins.scl2, pins.i2c, ws2812_old, ws2812_new), true);
+        return (
+            init_alt_i2c(pins.sda2, pins.scl2, pins.i2c, ws2812_old, ws2812_new),
+            true,
+        );
     }
 
     let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(veml_temp));
@@ -181,12 +191,7 @@ fn init_alt_i2c(
     let config = I2cConfig::new()
         .baudrate(KiloHertz::from(20).into())
         .timeout(Duration::from_millis(100).into());
-    let i2c_0 = I2cDriver::new(
-        i2c,
-        sda,
-        scl,
-        &config,
-    );
+    let i2c_0 = I2cDriver::new(i2c, sda, scl, &config);
     if i2c_0.is_err() {
         led::show_veml_not_found_error(ws2812_old, ws2812_new);
         unreachable!();

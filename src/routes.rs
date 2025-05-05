@@ -21,7 +21,7 @@ use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers::{self, read_spoolman_url, NvsData},
+    helpers::{self, read_spoolman_data, NvsData},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
     wifi::{self, WifiEnum},
@@ -29,7 +29,6 @@ use crate::{
 };
 
 static INDEX_HTML: &str = include_str!("index.html");
-
 
 // #[derive(Deserialize, Debug)]
 // struct SpoolmanFilamentResponse {
@@ -44,23 +43,24 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let spoolman_url = helpers::read_spoolman_url(self.nvs.as_ref().clone());
-        let spoolman_available = match spoolman_url.is_some() && !spoolman_url.unwrap().is_empty() {
-            true => "true",
-            false => "false"
-        };
+        let spoolman_data = helpers::read_spoolman_data(self.nvs.as_ref().clone());
+        let spoolman_available =
+            match spoolman_data.0.is_some() && !spoolman_data.0.unwrap().is_empty() {
+                true => "true",
+                false => "false",
+            };
         conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(
-                INDEX_HTML
-                    .replace(
-                        "{{VERSION}}",
-                        option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
-                    )
-                    .replace("{{ SPOOLMAN_AVAILABLE }}", spoolman_available)
-                    .as_bytes(),
-            )
             .await?;
+        conn.write_all(
+            INDEX_HTML
+                .replace(
+                    "{{VERSION}}",
+                    option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
+                )
+                .replace("{{ SPOOLMAN_AVAILABLE }}", spoolman_available)
+                .as_bytes(),
+        )
+        .await?;
         Ok(())
     }
 }
@@ -137,60 +137,60 @@ impl WsHandler<'_> {
             }
         };
     }
-/*
-    pub async fn spoolman_get_filaments<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        let spoolman_url = read_spoolman_url(self.nvs.as_ref().clone());
-        if spoolman_url.is_none() {
-            conn.initiate_response(400, None, &[("Content-Type", "application/json")])
-                .await?;
-            conn.write_all(r#"{"status": "spoolman_url_not_set", "filaments": []}"#.as_ref())
-                .await?;
-            return Ok(());
-        }
-        let mut client = Client::wrap(EspHttpConnection::new(&Default::default()).unwrap());
-        let url = format!("{}/api/v1/filament", spoolman_url.unwrap());
-        let req = client
-            .request(Method::Get, &url, &[("accept", "application/json")])
-            .unwrap();
-        let res = req.submit();
-        if res.is_err() {
-            conn.initiate_response(500, None, &[("Content-Type", "application/json")])
-                .await?;
-            conn.write_all(r#"{"status": "request_to_spoolman_failed", "filaments": []}"#.as_ref())
-                .await?;
-            return Ok(());
-        }
-        let mut res = res.unwrap();
-        let mut buf = [0u8; 4048];
-        let _ = res.read(&mut buf);
-        info!("Response: {}", String::from_utf8_lossy(&buf));
-        let base_value: Value = serde_json::from_slice::<Value>(&buf).unwrap();
-        let stream = base_value.as_array().unwrap();
-        conn.initiate_response(200, None, &[("Content-Type", "application/json")])
-            .await?;
-        conn.write_all(r#"{"status": "request_to_spoolman_failed", "filaments": ["#.as_ref())
-            .await?;
-        for (i, value) in stream.iter().enumerate() {
-            let mut data = format!(
-                r#"{{"name": "{}", "id": {}}}"#,
-                value.get("name").unwrap().as_str().unwrap(),
-                value.get("id").unwrap().as_i64().unwrap()
-            );
-            if i != 0 {
-                data = ",".to_string() + &data
-            }
-            conn.write_all(data.as_ref()).await?;
-        }
-        conn.write_all("]}".as_ref()).await?;
-        return Ok(());
-    }
- */
+    /*
+       pub async fn spoolman_get_filaments<T, const N: usize>(
+           &self,
+           conn: &mut Connection<'_, T, N>,
+       ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+       where
+           T: Read + Write,
+       {
+           let spoolman_url = read_spoolman_url(self.nvs.as_ref().clone());
+           if spoolman_url.is_none() {
+               conn.initiate_response(400, None, &[("Content-Type", "application/json")])
+                   .await?;
+               conn.write_all(r#"{"status": "spoolman_url_not_set", "filaments": []}"#.as_ref())
+                   .await?;
+               return Ok(());
+           }
+           let mut client = Client::wrap(EspHttpConnection::new(&Default::default()).unwrap());
+           let url = format!("{}/api/v1/filament", spoolman_url.unwrap());
+           let req = client
+               .request(Method::Get, &url, &[("accept", "application/json")])
+               .unwrap();
+           let res = req.submit();
+           if res.is_err() {
+               conn.initiate_response(500, None, &[("Content-Type", "application/json")])
+                   .await?;
+               conn.write_all(r#"{"status": "request_to_spoolman_failed", "filaments": []}"#.as_ref())
+                   .await?;
+               return Ok(());
+           }
+           let mut res = res.unwrap();
+           let mut buf = [0u8; 4048];
+           let _ = res.read(&mut buf);
+           info!("Response: {}", String::from_utf8_lossy(&buf));
+           let base_value: Value = serde_json::from_slice::<Value>(&buf).unwrap();
+           let stream = base_value.as_array().unwrap();
+           conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+               .await?;
+           conn.write_all(r#"{"status": "request_to_spoolman_failed", "filaments": ["#.as_ref())
+               .await?;
+           for (i, value) in stream.iter().enumerate() {
+               let mut data = format!(
+                   r#"{{"name": "{}", "id": {}}}"#,
+                   value.get("name").unwrap().as_str().unwrap(),
+                   value.get("id").unwrap().as_i64().unwrap()
+               );
+               if i != 0 {
+                   data = ",".to_string() + &data
+               }
+               conn.write_all(data.as_ref()).await?;
+           }
+           conn.write_all("]}".as_ref()).await?;
+           return Ok(());
+       }
+    */
     pub async fn spoolman_set_filament<T, const N: usize>(
         &self,
         path: &str,
@@ -237,8 +237,8 @@ impl WsHandler<'_> {
                 return Ok(());
             }
         };
-        let spoolman_url = read_spoolman_url(self.nvs.as_ref().clone());
-        if spoolman_url.is_none() || spoolman_url.clone().unwrap().is_empty() {
+        let spoolman_data = read_spoolman_data(self.nvs.as_ref().clone());
+        if spoolman_data.0.is_none() || spoolman_data.0.clone().unwrap().is_empty() {
             conn.initiate_response(400, None, &[("Content-Type", "text/plain")])
                 .await?;
             conn.write_all(r#"Could not read storage."#.as_ref())
@@ -247,8 +247,16 @@ impl WsHandler<'_> {
         }
 
         let mut client = Client::wrap(EspHttpConnection::new(&Default::default()).unwrap());
-        let url = format!("{}/api/v1/filament/{}", spoolman_url.unwrap(), filament_id);
-        let payload = format!(r#"{{"extra": {{"td": "{}"}}}}"#, value);
+        let url = format!(
+            "{}/api/v1/filament/{}",
+            spoolman_data.0.unwrap(),
+            filament_id
+        );
+        let payload = format!(
+            r#"{{"extra": {{"{}": "{}"}}}}"#,
+            spoolman_data.1.unwrap_or("td".to_string()),
+            value
+        );
         let payload_length = format!("{}", payload.len());
         let headers = [
             ("accept", "application/json"),
@@ -296,15 +304,21 @@ impl WsHandler<'_> {
         let b_value = url_params.get("b");
         let threshold_value = url_params.get("threshold");
         let spoolman_value = url_params.get("spoolman_url");
+        let spoolman_field_name = url_params.get("spoolman_field_name");
         if m_value.is_none()
             && b_value.is_none()
             && threshold_value.is_none()
             && spoolman_value.is_none()
         {
             let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
-            let saved_spoolman = match helpers::read_spoolman_url(self.nvs.as_ref().clone()) {
+            let saved_spoolman = helpers::read_spoolman_data(self.nvs.as_ref().clone());
+            let spoolman_url = match saved_spoolman.0 {
                 Some(d) => d,
                 None => "".to_string(),
+            };
+            let spoolman_field_name = match saved_spoolman.1 {
+                Some(d) => d,
+                None => "td".to_string(),
             };
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
@@ -313,7 +327,8 @@ impl WsHandler<'_> {
                     saved_algorithm.b,
                     saved_algorithm.m,
                     saved_algorithm.threshold,
-                    &saved_spoolman,
+                    &spoolman_url,
+                    &spoolman_field_name,
                 )
                 .as_ref(),
             )
@@ -332,8 +347,14 @@ impl WsHandler<'_> {
         let mod_spoolman_value = spoolman_value
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned("".to_string()));
-        let save_spoolman_res =
-            helpers::save_spoolman_url(&mod_spoolman_value, self.nvs.as_ref().clone());
+        let mod_spoolman_field_name = spoolman_field_name
+            .map(Cow::Borrowed)
+            .unwrap_or_else(|| Cow::Owned("".to_string()));
+        let save_spoolman_res = helpers::save_spoolman_data(
+            &mod_spoolman_value,
+            &mod_spoolman_field_name,
+            self.nvs.as_ref().clone(),
+        );
         if save_spoolman_res.is_err() {
             error!("{:?}", save_spoolman_res.err().unwrap());
             embassy_time::Timer::after_millis(50).await;
@@ -354,6 +375,7 @@ impl WsHandler<'_> {
                         mod_m_value.parse::<f32>().unwrap_or(1.0),
                         mod_threshold_value.parse::<f32>().unwrap_or(0.8),
                         &mod_spoolman_value,
+                        &mod_spoolman_field_name
                     )
                     .as_ref(),
                 )
