@@ -1,8 +1,9 @@
-use anyhow::bail;
-use esp_idf_svc::{
-    nvs::{EspNvs, EspNvsPartition, NvsDefault},
-    sys::esp_random,
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
 };
+
+use anyhow::bail;
 use log::{error, info, warn};
 
 #[derive(Debug, Clone, Copy)]
@@ -12,12 +13,33 @@ pub struct NvsData {
     pub threshold: f32,
 }
 
+use esp_idf_svc::{
+    hal::{
+        gpio::{Gpio10, Gpio5, Gpio6, Gpio8},
+        i2c::{I2cConfig, I2cDriver, I2C0},
+        peripheral::Peripheral,
+    },
+    nvs::{EspNvs, EspNvsPartition, NvsDefault},
+    sys::esp_random,
+};
+use veml7700::Veml7700;
+
+use crate::{
+    led,
+    LedType,
+};
+use esp_idf_svc::hal::prelude::*;
+
 pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsData {
     let nvs = match EspNvs::new(nvs, "algo", true) {
         Ok(nvs) => nvs,
         Err(_) => {
             warn!("NVS init failed");
-            return NvsData {b: 0.0, m: 1.0, threshold: 0.8};
+            return NvsData {
+                b: 0.0,
+                m: 1.0,
+                threshold: 0.8,
+            };
         }
     };
     let mut b_val_buffer = vec![0; 256];
@@ -106,4 +128,77 @@ pub fn read_spoolman_url(
     nvs.get_str("spoolman_url", &mut spoolman_url_buf)
         .unwrap_or(None)
         .map(|s| s.to_string())
+}
+
+pub struct Pins {
+    pub sda1: Gpio6,
+    pub scl1: Gpio5,
+    pub sda2: Gpio8,
+    pub scl2: Gpio10,
+    pub i2c: I2C0,
+}
+pub fn initialize_veml(
+    mut pins: Pins,
+    ws2812_old: Arc<Mutex<LedType>>,
+    ws2812_new: Arc<Mutex<LedType>>,
+) -> (Arc<Mutex<Veml7700<I2cDriver<'static>>>>, bool) {
+    let config = I2cConfig::new()
+        .baudrate(KiloHertz::from(20).into())
+        .timeout(Duration::from_millis(100).into());
+
+    // Try GPIO6 and 5
+    let i2c_0 = I2cDriver::new(
+        unsafe { pins.i2c.clone_unchecked() },
+        pins.sda1,
+        pins.scl1,
+        &config,
+    );
+    if i2c_0.is_err() {
+        info!("Trying alt i2c before veml enable");
+        drop(i2c_0.unwrap());
+        return (init_alt_i2c(pins.sda2,pins.scl2, pins.i2c, ws2812_old, ws2812_new), true);
+    }
+    let mut veml_temp = Veml7700::new(i2c_0.unwrap());
+
+    let veml_enable_res = veml_temp.enable();
+    if veml_enable_res.is_err() {
+        drop(veml_temp.destroy());
+        info!("Trying alt i2c after veml enable");
+        return (init_alt_i2c(pins.sda2,pins.scl2, pins.i2c, ws2812_old, ws2812_new), true);
+    }
+
+    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(veml_temp));
+    (veml, false)
+}
+
+fn init_alt_i2c(
+    sda: Gpio8,
+    scl: Gpio10,
+    i2c: I2C0,
+    ws2812_old: Arc<Mutex<LedType>>,
+    ws2812_new: Arc<Mutex<LedType>>,
+) -> Arc<Mutex<Veml7700<I2cDriver<'static>>>> {
+    let config = I2cConfig::new()
+        .baudrate(KiloHertz::from(20).into())
+        .timeout(Duration::from_millis(100).into());
+    let i2c_0 = I2cDriver::new(
+        i2c,
+        sda,
+        scl,
+        &config,
+    );
+    if i2c_0.is_err() {
+        led::show_veml_not_found_error(ws2812_old, ws2812_new);
+        unreachable!();
+    }
+    let mut veml_temp = Veml7700::new(i2c_0.unwrap());
+
+    let veml_enable_res = veml_temp.enable();
+    if veml_enable_res.is_err() {
+        led::show_veml_not_found_error(ws2812_old, ws2812_new);
+        unreachable!();
+    }
+
+    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(veml_temp));
+    veml
 }

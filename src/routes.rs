@@ -16,9 +16,7 @@ use esp_idf_svc::{
     http::{client::EspHttpConnection, Method},
     io::Write as _,
 };
-use log::{error, info};
-use serde::Deserialize;
-use serde_json::Value;
+use log::error;
 use url::Url;
 use veml7700::Veml7700;
 
@@ -33,11 +31,11 @@ use crate::{
 static INDEX_HTML: &str = include_str!("index.html");
 
 
-#[derive(Deserialize, Debug)]
-struct SpoolmanFilamentResponse {
-    id: u32,
-    name: String,
-}
+// #[derive(Deserialize, Debug)]
+// struct SpoolmanFilamentResponse {
+//     id: u32,
+//     name: String,
+// }
 impl WsHandler<'_> {
     pub async fn server_index_page<T, const N: usize>(
         &self,
@@ -139,7 +137,7 @@ impl WsHandler<'_> {
             }
         };
     }
-
+/*
     pub async fn spoolman_get_filaments<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -192,7 +190,7 @@ impl WsHandler<'_> {
         conn.write_all("]}".as_ref()).await?;
         return Ok(());
     }
-
+ */
     pub async fn spoolman_set_filament<T, const N: usize>(
         &self,
         path: &str,
@@ -508,13 +506,19 @@ async fn read_data(
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
-    let reading = match veml.lock().unwrap().read_lux() {
-        Ok(r) => r,
+    let mut locked_veml = veml.lock().unwrap();
+    let clr = match locked_veml.read_lux() {
+        Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
             return None;
         }
     };
+    // let r = locked_veml.read_red().unwrap();
+    // let g = locked_veml.read_green().unwrap();
+    // let b = locked_veml.read_blue().unwrap();
+    // let reading = (clr * r * g * b) as f32;
+    let reading = clr as f32;
 
     let ws_message: String;
     if reading / dark_baseline_reading > saved_algorithm.threshold {
@@ -537,13 +541,18 @@ async fn read_data(
             }
         }
         embassy_time::Timer::after_millis(5).await; // Short delay before measuring again
-        let reading = match veml.lock().unwrap().read_lux() {
-            Ok(r) => r,
+        let clr = match locked_veml.read_lux() {
+            Ok(d) => d,
             Err(e) => {
-                log::error!("Failed to read sensor after LED activation: {:?}", e);
+                log::error!("Failed to read sensor: {:?}", e);
                 return None;
             }
         };
+        // let r = locked_veml.read_red().unwrap();
+        // let g = locked_veml.read_green().unwrap();
+        // let b = locked_veml.read_blue().unwrap();
+        // let reading = (clr * r * g * b) as f32;
+        let reading = clr as f32;
 
         let td_value = (reading / baseline_reading) * 100.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
@@ -586,13 +595,19 @@ pub async fn read_averaged_data(
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
-    let reading = match veml.lock().unwrap().read_lux() {
-        Ok(r) => r,
+    let mut locked_veml = veml.lock().unwrap();
+    let clr = match locked_veml.read_lux() {
+        Ok(d) => d,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
             return None;
         }
     };
+    // let r = locked_veml.read_red().unwrap();
+    // let g = locked_veml.read_green().unwrap();
+    // let b = locked_veml.read_blue().unwrap();
+    // let reading = (clr * r * g * b) as f32;
+    let reading = clr as f32;
 
     let ws_message: String;
     if reading / dark_baseline_reading > saved_algorithm.threshold {
@@ -616,15 +631,19 @@ pub async fn read_averaged_data(
         }
         embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
         let mut readings_summed_up: f32 = 0.0;
-        let mut unlocked_veml = veml.lock().unwrap();
         for _ in 0..AVERAGE_SAMPLE_RATE {
-            readings_summed_up += match unlocked_veml.read_lux() {
-                Ok(r) => r,
+            let clr = match locked_veml.read_lux() {
+                Ok(d) => d,
                 Err(e) => {
-                    log::error!("Failed to read sensor after LED activation: {:?}", e);
+                    log::error!("Failed to read sensor: {:?}", e);
                     return None;
                 }
             };
+            // let r = locked_veml.read_red().unwrap();
+            // let g = locked_veml.read_green().unwrap();
+            // let b = locked_veml.read_blue().unwrap();
+            // readings_summed_up += (clr * r * g * b) as f32;
+            readings_summed_up += clr as f32;
             embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
         }
         {

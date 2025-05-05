@@ -44,6 +44,8 @@ ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
 embedded-svc = {version = "*"}
 serde = {version = "*"}
 serde_json = {version = "*"}
+libm = "0.2"
+bitbang-hal = "0.3"
 
 [build-dependencies]
 embuild = {version = "0.33", features = ["espidf"]}
