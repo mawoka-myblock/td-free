@@ -37,9 +37,13 @@ url = "2.5"
 veml7700 = "0.2.0"
 embassy-time = { version = "0.4", features = ["log", "generic-queue-8"] }
 embassy-futures = "0.1"
+embassy-sync = "0.6"
 async-std = {version = "1.13"}
 smart-leds = "*"
 ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
+embedded-svc = {version = "*"}
+serde = {version = "*"}
+serde_json = {version = "*"}
 libm = "0.2"
 bitbang-hal = "0.3"
 
