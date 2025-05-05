@@ -1740,6 +1740,17 @@
 			(uuid "75ab2c70-c219-40c4-82ef-7b53d9942dd0")
 		)
 		(embedded_fonts no)
+		(model "${EASYEDA2KICAD}/easyeda2kicad.3dshapes/LED-SMD_4P-L6.8-W2.4_VEML7700-TR.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz -90 -0 -90)
+			)
+		)
 	)
 	(footprint "Connector_USB:USB_C_Receptacle_GCT_USB4105-xx-A_16P_TopMnt_Horizontal"
 		(layer "F.Cu")
@@ -2428,6 +2439,18 @@
 		)
 		(embedded_fonts no)
 		(model "/home/mawoka/Documents/KiCad/Library/VEML3328/80216oplga4l.stp"
+			(hide yes)
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
+		(model "${EASYEDA2KICAD}/easyeda2kicad.3dshapes/SENSOR-SMD_VEML3328.wrl"
 			(offset
 				(xyz 0 0 0)
 			)
@@ -5766,6 +5789,17 @@
 		(fill no)
 		(layer "F.SilkS")
 		(uuid "ee73befc-92b0-4b3c-ace7-5567760cab00")
+	)
+	(gr_rect
+		(start 61 32)
+		(end 69 40)
+		(stroke
+			(width 0.1)
+			(type solid)
+		)
+		(fill yes)
+		(layer "B.SilkS")
+		(uuid "644d3253-5554-444e-881d-16cf358a9907")
 	)
 	(gr_arc
 		(start 74 43)
