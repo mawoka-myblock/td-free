@@ -160,8 +160,9 @@
             fallbackEnabled = true;
             document.getElementById("status").textContent = "Fallback mode enabled";
             clearInterval(intervalId);
+            fetchFallbackData()
             fallbackInterval = setInterval(fetchFallbackData, 1000);
-            attemptReconnect();
+            // attemptReconnect();
         }
 
         function attemptReconnect() {
@@ -230,7 +231,7 @@
             if (socket.readyState === WebSocket.OPEN) return
             startFallback()
         }
-        setTimeout(connectWebSocket, 300)
+        // setTimeout(connectWebSocket, 300)
         setTimeout(start_fallback_if_ws_failed, 1300)
 
     </script>
