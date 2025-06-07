@@ -606,8 +606,8 @@ pub async fn is_filament_inserted_dark(
     Ok(!(reading / dark_baseline_reading > saved_algorithm.threshold))
 }
 
-const AVERAGE_SAMPLE_RATE: i32 = 10;
-const AVERAGE_SAMPLE_DELAY: u64 = 100;
+const AVERAGE_SAMPLE_RATE: i32 = 30;
+const AVERAGE_SAMPLE_DELAY: u64 = 50;
 pub async fn read_averaged_data(
     veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
     dark_baseline_reading: f32,
@@ -651,8 +651,8 @@ pub async fn read_averaged_data(
                 return None;
             }
         }
+        let mut readings: Vec<f32> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
         embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
-        let mut readings_summed_up: f32 = 0.0;
         for _ in 0..AVERAGE_SAMPLE_RATE {
             let clr = match locked_veml.read_lux() {
                 Ok(d) => d,
@@ -661,11 +661,11 @@ pub async fn read_averaged_data(
                     return None;
                 }
             };
+            readings.push(clr as f32);
             // let r = locked_veml.read_red().unwrap();
             // let g = locked_veml.read_green().unwrap();
             // let b = locked_veml.read_blue().unwrap();
             // readings_summed_up += (clr * r * g * b) as f32;
-            readings_summed_up += clr as f32;
             embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
         }
         {
@@ -674,8 +674,30 @@ pub async fn read_averaged_data(
                 log::error!("Failed to adjust LED duty: {:?}", e);
             }
         }
-        let reading = readings_summed_up / AVERAGE_SAMPLE_RATE as f32;
-        let td_value = (reading / baseline_reading) * 10.0;
+        log::debug!("Raw readings: {:?}", readings);
+
+        // Calculate mean, std, and median
+        // Outlier removal
+        let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
+        let std = (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
+        let filtered: Vec<f32> = readings
+            .into_iter()
+            .filter(|v| (*v - mean).abs() <= 2.0 * std)
+            .collect();
+
+        let median = if filtered.is_empty() {
+            mean // fallback to mean if all filtered out
+        } else {
+            let mut filtered = filtered;
+            filtered.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            if filtered.len() % 2 == 0 {
+                let mid = filtered.len() / 2;
+                (filtered[mid - 1] + filtered[mid]) / 2.0
+            } else {
+                filtered[filtered.len() / 2]
+            }
+        };
+        let td_value = (median / baseline_reading) * 10.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         ws_message = adjusted_td_value.to_string();
 
