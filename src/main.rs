@@ -555,9 +555,9 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
 }
 
 fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
-    let mut max_reading: f32 = 0f32;
-    let sample_count = 10;
-    let sample_delay = 200u32;
+    let sample_count = 30;
+    let sample_delay = 50u32;
+    let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);
 
     for _ in 0..sample_count {
         let mut locked_veml = veml.lock().unwrap();
@@ -572,14 +572,38 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
                 continue;
             }
         };
-        // let r = locked_veml.read_red().unwrap();
-        // let g = locked_veml.read_green().unwrap();
-        // let b = locked_veml.read_blue().unwrap();
-        // log::info!("Base reading: Clr: {clr}, R: {r}, B: {b}, G: {g}");
         let reading = clr as f32;
-        log::info!("Reading: {}", reading.clone());
-        max_reading += reading;
+        log::info!("Reading: {}", reading);
+        readings.push(reading);
         FreeRtos.delay_ms(sample_delay);
     }
-    max_reading / sample_count as f32
+
+    if readings.is_empty() {
+        return 0.0; // Avoid divide by zero or panics later
+    }
+
+    // Calculate mean and std deviation
+    let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
+    let std = (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
+
+    // Filter out outliers
+    let mut filtered: Vec<f32> = readings
+    .into_iter()
+    .filter(|v| (*v - mean).abs() <= 2.0 * std)
+    .collect();
+
+    // Calculate median from filtered data
+    if filtered.is_empty() {
+        return mean; // fallback to mean if all readings were filtered out
+    }
+
+    filtered.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = if filtered.len() % 2 == 0 {
+        let mid = filtered.len() / 2;
+        (filtered[mid - 1] + filtered[mid]) / 2.0
+    } else {
+        filtered[filtered.len() / 2]
+    };
+
+    median
 }
