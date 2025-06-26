@@ -71,6 +71,8 @@ fn main() -> Result<(), ()> {
     // It is necessary to call this function once. Otherwise some patches to the runtime
     // implemented by esp-idf-sys might not link properly. See https://github.com/esp-rs/esp-idf-template/issues/71
     esp_idf_svc::sys::link_patches();
+    esp_idf_svc::log::EspLogger::initialize_default();
+    log::set_max_level(log::LevelFilter::Trace);
 
     // Bind the log crate to the ESP Logging facilities
     let logger = esp_idf_svc::log::EspLogger::new();
@@ -232,28 +234,34 @@ fn main() -> Result<(), ()> {
         peripherals.pins.gpio19,
         &UsbSerialConfig::new(),
     )
-    .unwrap();
+        .unwrap();
+    drop(serial_driver);
+    log::info!("USB logging enabled (development build)");
     let mut exit_buffer = [0u8; 1];
-    serial_driver.read(&mut exit_buffer, 500).unwrap();
+    //serial_driver.read(&mut exit_buffer, 500).unwrap();
     let serial_future = async move {
         if exit_buffer.iter().any(|&x| x == b'e') {
-            drop(serial_driver);
+            //drop(serial_driver);
             log::info!("Logging reactivated!");
             future::pending::<Result<(), anyhow::Error>>().await
         } else {
-            log::warn!("Logging deactivated from now on, this is last log message!");
-            logger.set_target_level("*", log::LevelFilter::Off).unwrap();
-            serial_connection(
-                &mut serial_driver,
-                veml,
-                dark_baseline_reading,
-                baseline_reading,
-                wifi_status,
-                led_light,
-                ws2812.clone(),
-                saved_algorithm,
-            )
-            .await
+            //log::warn!("Logging deactivated from now on, this is last log message!");
+            //logger.set_target_level("*", log::LevelFilter::Off).unwrap();
+            //serial_connection(
+            //    &mut serial_driver,
+            //                 veml,
+            //                 veml_rgb,
+            //                 dark_baseline_reading,
+            //                 baseline_reading,
+            //                 rgb_calibration,
+            //                 dark_rgb_calibration,
+            //                 wifi_status,
+            //                 led_light,
+            //                 ws2812.clone(),
+            //                 saved_algorithm,
+            //             )
+            //             .await
+            future::pending::<Result<(), anyhow::Error>>().await
         }
     };
     // let serial_future = serial_connection(&mut serial_driver);
