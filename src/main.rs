@@ -42,7 +42,7 @@ use esp_idf_svc::{
     hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::{generate_random_11_digit_number, Pins, initialize_veml, SharedI2cInstance};
+use helpers::{generate_random_11_digit_number, Pins, initialize_veml, HardwareI2cInstance, SimpleBitBangI2cInstance};
 use led::set_led;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
@@ -316,7 +316,7 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>) -> (u16, u16, u16) {
+fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>) -> (u16, u16, u16) {
     let sample_count = 10;
     let sample_delay = 100u32;
     let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
@@ -324,6 +324,15 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cIns
     let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
 
     log::info!("Starting RGB baseline reading with {} samples", sample_count);
+
+    // Do register dump only once and handle any errors gracefully
+    {
+        let mut locked_veml = veml_rgb.lock().unwrap();
+        match locked_veml.read_all_registers() {
+            Ok(_) => log::info!("Register dump completed successfully"),
+            Err(e) => log::warn!("Register dump failed: {:?}", e),
+        }
+    }
 
     for i in 0..sample_count {
         let mut locked_veml = veml_rgb.lock().unwrap();
@@ -339,6 +348,7 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cIns
                 continue;
             }
         }
+        drop(locked_veml); // Explicitly release the lock before delay
         FreeRtos.delay_ms(sample_delay);
     }
 
@@ -366,8 +376,8 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cIns
 
 pub async fn serial_connection<'a>(
     conn: &mut UsbSerialDriver<'static>,
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     rgb_baseline: (u16, u16, u16),
@@ -495,8 +505,8 @@ pub async fn serial_connection<'a>(
 #[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     rgb_baseline: (u16, u16, u16),
@@ -552,8 +562,8 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
 struct WsHandler<'a> {
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     rgb_baseline: (u16, u16, u16),
@@ -634,7 +644,7 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
     )
 }
 
-fn take_baseline_reading(veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>) -> f32 {
+fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32 {
     let sample_count = 30;
     let sample_delay = 50u32;
     let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);

@@ -21,7 +21,7 @@ use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers::{self, read_spoolman_data, NvsData, SharedI2cInstance},
+    helpers::{self, read_spoolman_data, NvsData, HardwareI2cInstance, SimpleBitBangI2cInstance},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
     veml3328,
@@ -540,7 +540,7 @@ fn normalize_rgb_value(value: u16, baseline: u16) -> u8 {
 }
 
 pub async fn is_filament_inserted_dark(
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     dark_baseline_reading: f32,
     saved_algorithm: NvsData,
 ) -> Result<bool, anyhow::Error> {
@@ -559,8 +559,8 @@ pub async fn is_filament_inserted_dark(
 }
 
 async fn read_data(
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     rgb_baseline: (u16, u16, u16),
@@ -588,7 +588,7 @@ async fn read_data(
             WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
             WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
         }
-        log::info!("No filament detected!");
+        //log::info!("No filament detected!");
         ws_message = "no_filament".to_string();
     } else {
         log::info!("Filament detected!");
@@ -611,11 +611,15 @@ async fn read_data(
         };
         let reading = clr as f32;
 
-        // Read RGB values
+        // Read RGB values with longer delays for stability
         let (r_raw, g_raw, b_raw) = {
             let mut locked_rgb = veml_rgb.lock().unwrap();
+            embassy_time::Timer::after_millis(5).await; // Delay before RGB read
             match (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
-                (Ok(r), Ok(g), Ok(b)) => (r, g, b),
+                (Ok(r), Ok(g), Ok(b)) => {
+                    log::debug!("RGB raw values: R={}, G={}, B={}", r, g, b);
+                    (r, g, b)
+                },
                 _ => {
                     log::warn!("Failed to read RGB sensor, using defaults");
                     (rgb_baseline.0, rgb_baseline.1, rgb_baseline.2)
@@ -643,6 +647,14 @@ async fn read_data(
             }
         }
 
+        {
+            let mut locked_veml = veml_rgb.lock().unwrap();
+            match locked_veml.read_all_registers() {
+                Ok(_) => log::info!("Register dump completed successfully"),
+                Err(e) => log::warn!("Register dump failed: {:?}", e),
+            }
+        }
+
         log::info!("Reading: {}, RGB: {} (raw: {},{},{})", td_value, hex_color, r_raw, g_raw, b_raw);
     }
     Some(ws_message)
@@ -651,8 +663,8 @@ async fn read_data(
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 50;
 pub async fn read_averaged_data(
-    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
     rgb_baseline: (u16, u16, u16),
