@@ -539,6 +539,52 @@ fn normalize_rgb_value(value: u16, baseline: u16) -> u8 {
     (scaled.min(255)) as u8
 }
 
+fn normalize_rgb_value_with_white_balance(value: u16, white_balance: u16) -> u8 {
+    if white_balance == 0 {
+        return 0;
+    }
+
+    // White balance correction: normalize against the white reference
+    // Scale to 0-255 range based on the proportion of the measured value to white balance
+    let normalized = (value as f32 / white_balance as f32) * 255.0;
+    (normalized.round().min(255.0).max(0.0)) as u8
+}
+
+fn apply_white_balance_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, wb_b: u16) -> (u8, u8, u8) {
+    // Calculate the minimum white balance value to use as baseline
+    let min_wb = wb_r.min(wb_g).min(wb_b) as f32;
+
+    // Calculate normalization factors - how much each channel needs to be scaled
+    // to balance against the weakest channel
+    let r_factor = min_wb / wb_r as f32;
+    let g_factor = min_wb / wb_g as f32;
+    let b_factor = min_wb / wb_b as f32;
+
+    // Apply the correction factors to the measured values
+    let r_corrected = (r as f32 * r_factor).round() as u16;
+    let g_corrected = (g as f32 * g_factor).round() as u16;
+    let b_corrected = (b as f32 * b_factor).round() as u16;
+
+    // Find the maximum corrected value to use for scaling to 0-255
+    let max_corrected = r_corrected.max(g_corrected).max(b_corrected);
+
+    // Scale to 0-255 range, with some amplification for better visibility
+    let scale_factor = if max_corrected > 0 {
+        (255.0 * 1.0) / max_corrected as f32  // Use 80% of full scale for headroom
+    } else {
+        1.0
+    };
+
+    let r_final = ((r_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+    let g_final = ((g_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+    let b_final = ((b_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+
+    log::debug!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}",
+               r, r_final, g, g_final, b, b_final, r_factor, g_factor, b_factor);
+
+    (r_final, g_final, b_final)
+}
+
 pub async fn is_filament_inserted_dark(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     dark_baseline_reading: f32,
@@ -563,7 +609,7 @@ async fn read_data(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_baseline: (u16, u16, u16),
+    rgb_white_balance: (u16, u16, u16),  // Now represents white balance values
     _dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
@@ -611,7 +657,7 @@ async fn read_data(
         };
         let reading = clr as f32;
 
-        // Read RGB values with longer delays for stability
+        // Read RGB values with white balance correction
         let (r_raw, g_raw, b_raw) = {
             let mut locked_rgb = veml_rgb.lock().unwrap();
             embassy_time::Timer::after_millis(5).await; // Delay before RGB read
@@ -621,8 +667,8 @@ async fn read_data(
                     (r, g, b)
                 },
                 _ => {
-                    log::warn!("Failed to read RGB sensor, using defaults");
-                    (rgb_baseline.0, rgb_baseline.1, rgb_baseline.2)
+                    log::warn!("Failed to read RGB sensor, using white balance defaults");
+                    (rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2)
                 }
             }
         };
@@ -630,11 +676,12 @@ async fn read_data(
         let td_value = (reading / baseline_reading) * 100.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         
-        // Normalize RGB values to 0-255 range
-        let r_norm = normalize_rgb_value(r_raw, rgb_baseline.0);
-        let g_norm = normalize_rgb_value(g_raw, rgb_baseline.1);
-        let b_norm = normalize_rgb_value(b_raw, rgb_baseline.2);
-        
+        // Apply white balance correction to normalize RGB values
+        let (r_norm, g_norm, b_norm) = apply_white_balance_correction(
+            r_raw, g_raw, b_raw,
+            rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
+        );
+
         // Create hex color string
         let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
         
@@ -655,7 +702,8 @@ async fn read_data(
             }
         }
 
-        log::info!("Reading: {}, RGB: {} (raw: {},{},{})", td_value, hex_color, r_raw, g_raw, b_raw);
+        log::info!("Reading: {}, RGB: {} (raw: {},{},{} -> corrected: {},{},{})",
+                  td_value, hex_color, r_raw, g_raw, b_raw, r_norm, g_norm, b_norm);
     }
     Some(ws_message)
 }
@@ -667,7 +715,7 @@ pub async fn read_averaged_data(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_baseline: (u16, u16, u16),
+    rgb_white_balance: (u16, u16, u16),  // Now represents white balance values
     _dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
@@ -762,41 +810,43 @@ pub async fn read_averaged_data(
             }
         };
         
-        // Calculate RGB medians
+        // Calculate RGB medians and apply white balance correction
         let r_median = if !r_readings.is_empty() {
             r_readings.sort();
             r_readings[r_readings.len() / 2]
         } else {
-            rgb_baseline.0
+            rgb_white_balance.0
         };
         
         let g_median = if !g_readings.is_empty() {
             g_readings.sort();
             g_readings[g_readings.len() / 2]
         } else {
-            rgb_baseline.1
+            rgb_white_balance.1
         };
         
         let b_median = if !b_readings.is_empty() {
             b_readings.sort();
             b_readings[b_readings.len() / 2]
         } else {
-            rgb_baseline.2
+            rgb_white_balance.2
         };
         
         let td_value = (median / baseline_reading) * 10.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         
-        // Normalize RGB values
-        let r_norm = normalize_rgb_value(r_median, rgb_baseline.0);
-        let g_norm = normalize_rgb_value(g_median, rgb_baseline.1);
-        let b_norm = normalize_rgb_value(b_median, rgb_baseline.2);
-        
+        // Apply white balance correction
+        let (r_norm, g_norm, b_norm) = apply_white_balance_correction(
+            r_median, g_median, b_median,
+            rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
+        );
+
         let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
         
         ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
 
-        log::info!("Reading: {}, RGB: {}", td_value, hex_color);
+        log::info!("Reading: {}, RGB: {} (medians: {},{},{} -> corrected: {},{},{})",
+                  td_value, hex_color, r_median, g_median, b_median, r_norm, g_norm, b_norm);
     }
     Some(ws_message)
 }

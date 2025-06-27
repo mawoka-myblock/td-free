@@ -608,6 +608,7 @@ pub fn initialize_veml(
     match veml_rgb_temp.enable() {
         Ok(_) => {
             log::info!("VEML3328 enabled successfully on bit-banged I2C");
+            log::info!("RGB sensor ready for white balance calibration");
             // Try to read device ID to verify communication
             match veml_rgb_temp.read_device_id() {
                 Ok(id) => {

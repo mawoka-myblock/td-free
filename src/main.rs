@@ -188,12 +188,18 @@ fn main() -> Result<(), ()> {
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     FreeRtos.delay_ms(500);
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
-    let rgb_baseline: (u16, u16, u16) = take_rgb_baseline_reading(veml_rgb.clone());
+
+    // White balance calibration at 50% LED brightness
+    let rgb_white_balance: (u16, u16, u16) = take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
+
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(400);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
-    let dark_rgb_baseline: (u16, u16, u16) = take_rgb_baseline_reading(veml_rgb.clone());
-    log::info!("Baseline readings completed");
+
+    // For compatibility, we'll use the white balance as both baseline values
+    let dark_rgb_baseline: (u16, u16, u16) = rgb_white_balance;
+
+    log::info!("Baseline readings completed with white balance calibration");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
     let hotspot_ip = block_on(wifi::wifi_setup(
@@ -221,7 +227,7 @@ fn main() -> Result<(), ()> {
         veml_rgb.clone(),
         dark_baseline_reading,
         baseline_reading,
-        rgb_baseline,
+        rgb_white_balance,  // Use white balance instead of rgb_baseline
         dark_rgb_baseline,
         wifi_status.clone(),
         led_light.clone(),
@@ -316,21 +322,38 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>) -> (u16, u16, u16) {
-    let sample_count = 10;
-    let sample_delay = 100u32;
+fn take_rgb_white_balance_calibration(
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    led_light: Arc<Mutex<LedcDriver<'_>>>
+) -> (u16, u16, u16) {
+    let sample_count = 15;
+    let sample_delay = 150u32;
     let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut g_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
 
-    log::info!("Starting RGB baseline reading with {} samples", sample_count);
+    log::info!("Starting RGB white balance calibration at full LED brightness with {} samples", sample_count);
 
-    // Do register dump only once and handle any errors gracefully
+    // Set LED to full brightness for white balance calibration
+    {
+        let mut led = led_light.lock().unwrap();
+        if let Err(e) = led.set_duty_cycle_fully_on() {
+            log::error!("Failed to set LED to full brightness for white balance: {:?}", e);
+            // Fallback to raw duty value
+            let max_duty = led.get_max_duty();
+            led.set_duty(max_duty).unwrap_or_default();
+        }
+    }
+
+    // Wait for LED to stabilize
+    FreeRtos.delay_ms(200);
+
+    // Do register dump only once for diagnostics
     {
         let mut locked_veml = veml_rgb.lock().unwrap();
         match locked_veml.read_all_registers() {
-            Ok(_) => log::info!("Register dump completed successfully"),
-            Err(e) => log::warn!("Register dump failed: {:?}", e),
+            Ok(_) => log::info!("Register dump completed successfully during white balance"),
+            Err(e) => log::warn!("Register dump failed during white balance: {:?}", e),
         }
     }
 
@@ -338,13 +361,13 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBan
         let mut locked_veml = veml_rgb.lock().unwrap();
         match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue()) {
             (Ok(r), Ok(g), Ok(b)) => {
-                log::debug!("Sample {}: R={}, G={}, B={}", i, r, g, b);
+                log::debug!("White balance sample {}: R={}, G={}, B={}", i, r, g, b);
                 r_readings.push(r);
                 g_readings.push(g);
                 b_readings.push(b);
             },
             (r_result, g_result, b_result) => {
-                log::warn!("Failed to read RGB sensor during baseline - R: {:?}, G: {:?}, B: {:?}", r_result, g_result, b_result);
+                log::warn!("Failed to read RGB sensor during white balance - R: {:?}, G: {:?}, B: {:?}", r_result, g_result, b_result);
                 continue;
             }
         }
@@ -353,11 +376,11 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBan
     }
 
     if r_readings.is_empty() {
-        log::error!("No valid RGB readings obtained, using default values");
-        return (100, 100, 100); // Default fallback values
+        log::error!("No valid RGB readings obtained during white balance, using default values");
+        return (1000, 1000, 1000); // Default values for white balance
     }
 
-    // Calculate median values
+    // Calculate median values for white balance
     r_readings.sort();
     g_readings.sort();
     b_readings.sort();
@@ -366,10 +389,17 @@ fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBan
     let g_median = g_readings[g_readings.len() / 2];
     let b_median = b_readings[b_readings.len() / 2];
 
-    log::info!("RGB baseline readings - R: {:?}", r_readings);
-    log::info!("RGB baseline readings - G: {:?}", g_readings);
-    log::info!("RGB baseline readings - B: {:?}", b_readings);
-    log::info!("RGB baseline final: R={}, G={}, B={}", r_median, g_median, b_median);
+    // Calculate relative intensities for logging
+    let min_intensity = r_median.min(g_median).min(b_median) as f32;
+    let r_ratio = r_median as f32 / min_intensity;
+    let g_ratio = g_median as f32 / min_intensity;
+    let b_ratio = b_median as f32 / min_intensity;
+
+    log::info!("RGB white balance readings - R: {:?}", r_readings);
+    log::info!("RGB white balance readings - G: {:?}", g_readings);
+    log::info!("RGB white balance readings - B: {:?}", b_readings);
+    log::info!("RGB white balance final (full LED): R={}, G={}, B={}", r_median, g_median, b_median);
+    log::info!("Channel intensity ratios (relative to weakest): R={:.2}x, G={:.2}x, B={:.2}x", r_ratio, g_ratio, b_ratio);
 
     (r_median, g_median, b_median)
 }
