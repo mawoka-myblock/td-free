@@ -336,10 +336,10 @@ fn take_rgb_white_balance_calibration(
 
     log::info!("Starting RGB white balance calibration at full LED brightness with {} samples", sample_count);
 
-    // Set LED to 25 brightness for white balance calibration
+    // Set LED to 75 brightness for white balance calibration
     {
         let mut led = led_light.lock().unwrap();
-        led.set_duty(25).unwrap();
+        led.set_duty(75).unwrap();
     }
 
     // Wait for LED to stabilize
