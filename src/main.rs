@@ -346,13 +346,13 @@ fn take_rgb_white_balance_calibration(
     FreeRtos.delay_ms(200);
 
     // Do register dump only once for diagnostics
-    {
-        let mut locked_veml = veml_rgb.lock().unwrap();
-        match locked_veml.read_all_registers() {
-            Ok(_) => log::info!("Register dump completed successfully during white balance"),
-            Err(e) => log::warn!("Register dump failed during white balance: {:?}", e),
-        }
-    }
+//     {
+//         let mut locked_veml = veml_rgb.lock().unwrap();
+//         match locked_veml.read_all_registers() {
+//             Ok(_) => log::info!("Register dump completed successfully during white balance"),
+//             Err(e) => log::warn!("Register dump failed during white balance: {:?}", e),
+//         }
+//     }
 
     for i in 0..sample_count {
         let mut locked_veml = veml_rgb.lock().unwrap();

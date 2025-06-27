@@ -835,7 +835,7 @@ async fn read_data_with_buffer(
     };
 
     // Use a more conservative clear reference estimation
-    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 0.9;
+    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.376;
 
     log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est={:.0}",
                r_median, g_median, b_median, clear_median,
