@@ -83,6 +83,60 @@
         .hidden {
             display: none;
         }
+        
+        .color-display {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 15px auto;
+            gap: 10px;
+        }
+        
+        .color-square {
+            width: 50px;
+            height: 50px;
+            border: 2px solid #ccc;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        
+        .color-square:hover {
+            transform: scale(1.1);
+        }
+        
+        .color-info {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+        
+        .color-hex {
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            padding: 5px 10px;
+            background-color: #f5f5f5;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+            user-select: all;
+            transition: background-color 0.2s;
+        }
+        
+        .color-hex:hover {
+            background-color: #e0e0e0;
+        }
+        
+        .color-hex.copied {
+            background-color: #d4edda;
+            border-color: #c3e6cb;
+        }
+        
+        .color-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 3px;
+        }
     </style>
 </head>
 
@@ -91,14 +145,21 @@
         <h1>Td-Free</h1>
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
+        <div id="color-display" class="color-display hidden">
+            <div id="color-square" class="color-square" onclick="copyHexColor()"></div>
+            <div class="color-info">
+                <div class="color-label">Color (click to copy):</div>
+                <div id="color-hex" class="color-hex" onclick="copyHexColor()"></div>
+            </div>
+        </div>
         <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to
             Spoolman</button>
         <button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged
             data</button>
         <div style="display: flex; flex-direction: column; margin-top: auto;">
             <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
+            <a href="/settings" class="wifi-link" onclick="settings_cfg">Settings</a>
             <p class="wifi-link" style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
-            <!-- <a href="/update" class="wifi-link" onclick="update_fw">Update Firmware</a> -->
         </div>
     </div>
 
@@ -109,13 +170,44 @@
         let fallbackEnabled = false;
         let showing_averaged = false;
         let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
+        let currentHexColor = null;
+
+        function copyHexColor() {
+            if (!currentHexColor) return;
+            
+            navigator.clipboard.writeText(currentHexColor).then(() => {
+                const hexEl = document.getElementById("color-hex");
+                const originalText = hexEl.textContent;
+                hexEl.textContent = "Copied!";
+                hexEl.classList.add("copied");
+                
+                setTimeout(() => {
+                    hexEl.textContent = originalText;
+                    hexEl.classList.remove("copied");
+                }, 1500);
+            }).catch(err => {
+                console.error('Failed to copy: ', err);
+                // Fallback for older browsers
+                const textArea = document.createElement("textarea");
+                textArea.value = currentHexColor;
+                document.body.appendChild(textArea);
+                textArea.select();
+                try {
+                    document.execCommand('copy');
+                    alert('Color code copied to clipboard!');
+                } catch (err) {
+                    alert('Could not copy to clipboard. Color code: ' + currentHexColor);
+                }
+                document.body.removeChild(textArea);
+            });
+        }
 
         function saveToSpoolman() {
             const promted_id = prompt("Please enter the Spoolman Filament ID")
             if (promted_id === "" || !promted_id) return
             const id = parseInt(promted_id)
             if (isNaN(id)) {
-                alert("Negative ID is impossible, not saving")
+                alert("Invalid ID, not saving")
                 return
             }
             const el = document.getElementById("content");
@@ -206,7 +298,9 @@
             fetch("/averaged")
                 .then(response => response.text())
                 .then(data => {
-                    updateContent(data); document.getElementById("status").textContent = "Showing averaged data"; document.getElementById("averaged-btn").textContent = "Go back to live mode";
+                    updateContent(data); 
+                    document.getElementById("status").textContent = "Showing averaged data"; 
+                    document.getElementById("averaged-btn").textContent = "Go back to live mode";
                     document.getElementById("averaged-btn").disabled = false
                 })
                 .catch((e) => { document.getElementById("status").textContent = `Error: ${e}` });
@@ -214,13 +308,43 @@
 
         function updateContent(data) {
             const el = document.getElementById("content");
+            const colorDisplay = document.getElementById("color-display");
+            const colorSquare = document.getElementById("color-square");
+            const colorHex = document.getElementById("color-hex");
+            
             if (data === "no_filament") {
-                document.getElementById("save-to-spoolman-btn").classList.add("hidden")
+                document.getElementById("save-to-spoolman-btn").classList.add("hidden");
+                colorDisplay.classList.add("hidden");
                 el.innerText = "No filament inserted! Insert some";
-            } else {
+                currentHexColor = null;
+                return;
+            }
+            
+            // Check if data contains RGB info (format: "value,#RRGGBB")
+            const parts = data.split(',');
+            if (parts.length >= 2 && parts[1].startsWith('#')) {
+                const numValue = parseFloat(parts[0]);
+                const hexColor = parts[1];
+                
                 if (spoolman_available) {
-                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden")
+                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
                 }
+                
+                el.innerText = isNaN(numValue) ? "An error occurred!" : numValue.toFixed(2);
+                
+                // Display color information
+                colorDisplay.classList.remove("hidden");
+                colorSquare.style.backgroundColor = hexColor;
+                colorHex.innerText = hexColor;
+                currentHexColor = hexColor;
+            } else {
+                // Legacy format without RGB data
+                if (spoolman_available) {
+                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
+                }
+                colorDisplay.classList.add("hidden");
+                currentHexColor = null;
+                
                 const num = parseFloat(data);
                 el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
             }

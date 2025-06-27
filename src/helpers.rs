@@ -17,15 +17,71 @@ use esp_idf_svc::{
     hal::{
         gpio::{Gpio10, Gpio5, Gpio6, Gpio8},
         i2c::{I2cConfig, I2cDriver, I2C0},
-        peripheral::Peripheral,
     },
     nvs::{EspNvs, EspNvsPartition, NvsDefault},
     sys::esp_random,
 };
 use veml7700::Veml7700;
 
-use crate::{led, LedType};
+use crate::{led, veml3328, LedType};
 use esp_idf_svc::hal::prelude::*;
+
+// Shared I2C wrapper that allows multiple sensors to use the same I2C bus
+pub struct SharedI2c {
+    driver: Arc<Mutex<I2cDriver<'static>>>,
+}
+
+impl SharedI2c {
+    pub fn new(driver: I2cDriver<'static>) -> Self {
+        Self {
+            driver: Arc::new(Mutex::new(driver)),
+        }
+    }
+
+    pub fn clone_driver(&self) -> SharedI2cInstance {
+        SharedI2cInstance {
+            driver: self.driver.clone(),
+        }
+    }
+}
+
+pub struct SharedI2cInstance {
+    driver: Arc<Mutex<I2cDriver<'static>>>,
+}
+
+impl embedded_hal::i2c::ErrorType for SharedI2cInstance {
+    type Error = esp_idf_svc::hal::i2c::I2cError;
+}
+
+impl embedded_hal::i2c::I2c for SharedI2cInstance {
+    fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+        self.driver.lock().unwrap()
+            .read(address, read, 1000) // 1000ms timeout
+            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+    }
+
+    fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+        self.driver.lock().unwrap()
+            .write(address, write, 1000) // 1000ms timeout
+            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+    }
+
+    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
+        self.driver.lock().unwrap()
+            .write_read(address, write, read, 1000) // 1000ms timeout
+            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+    }
+
+    fn transaction(
+        &mut self,
+        address: u8,
+        operations: &mut [embedded_hal::i2c::Operation<'_>],
+    ) -> Result<(), Self::Error> {
+        self.driver.lock().unwrap()
+            .transaction(address, operations, 1000) // 1000ms timeout
+            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+    }
+}
 
 pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsData {
     let nvs = match EspNvs::new(nvs, "algo", true) {
@@ -141,62 +197,86 @@ pub struct Pins {
     pub scl2: Gpio10,
     pub i2c: I2C0,
 }
+
 pub fn initialize_veml(
-    mut pins: Pins,
+    pins: Pins,
     ws2812_old: Arc<Mutex<LedType>>,
     ws2812_new: Arc<Mutex<LedType>>,
-) -> (Arc<Mutex<Veml7700<I2cDriver<'static>>>>, bool) {
+) -> (Arc<Mutex<Veml7700<SharedI2cInstance>>>, Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>, bool) {
     let config = I2cConfig::new()
         .baudrate(KiloHertz::from(20).into())
         .timeout(Duration::from_millis(100).into());
 
-    // Try GPIO6 and 5
+    // Try GPIO6 and 5 first
     let i2c_0 = I2cDriver::new(
-        unsafe { pins.i2c.clone_unchecked() },
+        pins.i2c,
         pins.sda1,
         pins.scl1,
         &config,
     );
+    
     if i2c_0.is_err() {
         info!("Trying alt i2c before veml enable");
-        drop(i2c_0.unwrap());
-        return (
-            init_alt_i2c(pins.sda2, pins.scl2, pins.i2c, ws2812_old, ws2812_new),
-            true,
-        );
+        return init_alt_i2c_both(pins.sda2, pins.scl2, ws2812_old, ws2812_new);
     }
-    let mut veml_temp = Veml7700::new(i2c_0.unwrap());
+    
+    let i2c_driver = i2c_0.unwrap();
+    let shared_i2c = SharedI2c::new(i2c_driver);
+
+    // Create sensor instances using shared I2C
+    let mut veml_temp = Veml7700::new(shared_i2c.clone_driver());
+    let mut veml_rgb_temp = veml3328::VEML3328::new(shared_i2c.clone_driver());
 
     let veml_enable_res = veml_temp.enable();
     if veml_enable_res.is_err() {
-        drop(veml_temp.destroy());
         info!("Trying alt i2c after veml enable");
-        return (
-            init_alt_i2c(pins.sda2, pins.scl2, pins.i2c, ws2812_old, ws2812_new),
-            true,
-        );
+        return init_alt_i2c_both(pins.sda2, pins.scl2, ws2812_old, ws2812_new);
     }
 
-    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(veml_temp));
-    (veml, false)
+    // Enable RGB sensor and verify communication
+    if let Err(e) = veml_rgb_temp.enable() {
+        log::warn!("Could not enable RGB sensor: {:?}", e);
+    } else {
+        // Try to read device ID to verify communication
+        match veml_rgb_temp.read_device_id() {
+            Ok(id) => log::info!("VEML3328 device ID: 0x{:04X}", id),
+            Err(e) => log::warn!("Could not read VEML3328 device ID: {:?}", e),
+        }
+    }
+
+    let veml: Arc<Mutex<Veml7700<SharedI2cInstance>>> = Arc::new(Mutex::new(veml_temp));
+    let veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>> = Arc::new(Mutex::new(veml_rgb_temp));
+
+    (veml, veml_rgb, false)
 }
 
-fn init_alt_i2c(
+fn init_alt_i2c_both(
     sda: Gpio8,
     scl: Gpio10,
-    i2c: I2C0,
     ws2812_old: Arc<Mutex<LedType>>,
     ws2812_new: Arc<Mutex<LedType>>,
-) -> Arc<Mutex<Veml7700<I2cDriver<'static>>>> {
+) -> (Arc<Mutex<Veml7700<SharedI2cInstance>>>, Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>, bool) {
     let config = I2cConfig::new()
         .baudrate(KiloHertz::from(20).into())
         .timeout(Duration::from_millis(100).into());
-    let i2c_0 = I2cDriver::new(i2c, sda, scl, &config);
+    
+    let i2c_0 = I2cDriver::new(
+        unsafe { esp_idf_svc::hal::i2c::I2C0::new() },
+        sda,
+        scl,
+        &config,
+    );
+
     if i2c_0.is_err() {
         led::show_veml_not_found_error(ws2812_old, ws2812_new);
         unreachable!();
     }
-    let mut veml_temp = Veml7700::new(i2c_0.unwrap());
+    
+    let i2c_driver = i2c_0.unwrap();
+    let shared_i2c = SharedI2c::new(i2c_driver);
+
+    let mut veml_temp = Veml7700::new(shared_i2c.clone_driver());
+    let mut veml_rgb_temp = veml3328::VEML3328::new(shared_i2c.clone_driver());
 
     let veml_enable_res = veml_temp.enable();
     if veml_enable_res.is_err() {
@@ -204,6 +284,19 @@ fn init_alt_i2c(
         unreachable!();
     }
 
-    let veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>> = Arc::new(Mutex::new(veml_temp));
-    veml
+    // Enable RGB sensor and verify communication
+    if let Err(e) = veml_rgb_temp.enable() {
+        log::warn!("Could not enable RGB sensor: {:?}", e);
+    } else {
+        // Try to read device ID to verify communication
+        match veml_rgb_temp.read_device_id() {
+            Ok(id) => log::info!("VEML3328 device ID: 0x{:04X}", id),
+            Err(e) => log::warn!("Could not read VEML3328 device ID: {:?}", e),
+        }
+    }
+
+    let veml: Arc<Mutex<Veml7700<SharedI2cInstance>>> = Arc::new(Mutex::new(veml_temp));
+    let veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>> = Arc::new(Mutex::new(veml_rgb_temp));
+
+    (veml, veml_rgb, true)
 }

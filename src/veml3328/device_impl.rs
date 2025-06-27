@@ -6,11 +6,15 @@ const DEVICE_ADDRESS: u8 = 0x10;
 struct Register;
 impl Register {
     const CONFIG: u8 = 0x00;
+    const C_DATA: u8 = 0x04;
+
     const R_DATA: u8 = 0x05;
     const G_DATA: u8 = 0x06;
     const B_DATA: u8 = 0x07;
-    const C_DATA: u8 = 0x04;
+
     const IR_DATA: u8 = 0x08;
+
+    const ID_DATA: u8 = 0x0C;
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -81,6 +85,10 @@ where
         self.read_register(Register::IR_DATA)
     }
 
+    pub fn read_device_id(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::ID_DATA)
+    }
+
     fn set_config(&mut self, config: Config) -> Result<(), Error<I2C::Error>> {
         self.write_register(Register::CONFIG, config.bits)?;
         self.config = config;
@@ -91,16 +99,21 @@ where
         &mut self,
         register: u8,
         value: u16,
-    ) -> Result<(), <I2C as ErrorType>::Error> {
+    ) -> Result<(), Error<I2C::Error>> {
         self.i2c
             .write(DEVICE_ADDRESS, &[register, value as u8, (value >> 8) as u8])
+            .map_err(Error::I2C)
     }
 
     fn read_register(&mut self, register: u8) -> Result<u16, Error<I2C::Error>> {
         let mut data = [0; 2];
         self.i2c
             .write_read(DEVICE_ADDRESS, &[register], &mut data)
-            .map_err(Error::I2C)
-            .and(Ok(u16::from(data[0]) | u16::from(data[1]) << 8))
+            .map_err(Error::I2C)?;
+
+        // According to datasheet: data[0] = LSB (bits 7-0), data[1] = MSB (bits 15-8)
+        let result = u16::from(data[0]) | (u16::from(data[1]) << 8);
+        log::debug!("VEML3328 register 0x{:02X}: raw=[{}, {}], result={}", register, data[0], data[1], result);
+        Ok(result)
     }
 }

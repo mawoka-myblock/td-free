@@ -39,10 +39,10 @@ use esp_idf_svc::timer::EspTaskTimerService;
 use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
-    hal::{delay::FreeRtos, i2c::I2cDriver, peripherals::Peripherals, prelude::*},
+    hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::{generate_random_11_digit_number, Pins, initialize_veml};
+use helpers::{generate_random_11_digit_number, Pins, initialize_veml, SharedI2cInstance};
 use led::set_led;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
@@ -53,7 +53,7 @@ use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 mod helpers;
 mod led;
 mod routes;
-// mod veml3328;
+mod veml3328;
 mod wifi;
 
 
@@ -129,7 +129,7 @@ fn main() -> Result<(), ()> {
     ));
     ws2812_old.lock().unwrap().write_nocopy(std::iter::repeat(RGB8::new(255, 255, 0)).take(1)).unwrap();
     ws2812_new.lock().unwrap().write_nocopy(std::iter::repeat(RGB8::new(255, 255, 0)).take(1)).unwrap();
-    let (veml, is_old_pcb) = initialize_veml(
+    let (veml, veml_rgb, is_old_pcb) = initialize_veml(
         Pins {
             i2c: peripherals.i2c0,
             sda1: peripherals.pins.gpio6,
@@ -188,9 +188,11 @@ fn main() -> Result<(), ()> {
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     FreeRtos.delay_ms(500);
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
+    let rgb_baseline: (u16, u16, u16) = take_rgb_baseline_reading(veml_rgb.clone());
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(400);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
+    let dark_rgb_baseline: (u16, u16, u16) = take_rgb_baseline_reading(veml_rgb.clone());
     log::info!("Baseline readings completed");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
@@ -216,8 +218,11 @@ fn main() -> Result<(), ()> {
     let server_future = run(
         &mut server,
         veml.clone(),
+        veml_rgb.clone(),
         dark_baseline_reading,
         baseline_reading,
+        rgb_baseline,
+        dark_rgb_baseline,
         wifi_status.clone(),
         led_light.clone(),
         arced_nvs.clone(),
@@ -228,7 +233,7 @@ fn main() -> Result<(), ()> {
     log::warn!(
         "Activating serial connection, hold e to keep viewing logs and disable serial interface!!!"
     );
-    let mut serial_driver = UsbSerialDriver::new(
+    let serial_driver = UsbSerialDriver::new(
         peripherals.usb_serial,
         peripherals.pins.gpio18,
         peripherals.pins.gpio19,
@@ -237,7 +242,7 @@ fn main() -> Result<(), ()> {
         .unwrap();
     drop(serial_driver);
     log::info!("USB logging enabled (development build)");
-    let mut exit_buffer = [0u8; 1];
+    let exit_buffer = [0u8; 1];
     //serial_driver.read(&mut exit_buffer, 500).unwrap();
     let serial_future = async move {
         if exit_buffer.iter().any(|&x| x == b'e') {
@@ -261,7 +266,8 @@ fn main() -> Result<(), ()> {
             //                 saved_algorithm,
             //             )
             //             .await
-            future::pending::<Result<(), anyhow::Error>>().await
+            //future::pending::<Result<(), anyhow::Error>>().await
+            Ok(())
         }
     };
     // let serial_future = serial_connection(&mut serial_driver);
@@ -310,11 +316,62 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
+fn take_rgb_baseline_reading(veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>) -> (u16, u16, u16) {
+    let sample_count = 10;
+    let sample_delay = 100u32;
+    let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
+    let mut g_readings: Vec<u16> = Vec::with_capacity(sample_count);
+    let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
+
+    log::info!("Starting RGB baseline reading with {} samples", sample_count);
+
+    for i in 0..sample_count {
+        let mut locked_veml = veml_rgb.lock().unwrap();
+        match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue()) {
+            (Ok(r), Ok(g), Ok(b)) => {
+                log::debug!("Sample {}: R={}, G={}, B={}", i, r, g, b);
+                r_readings.push(r);
+                g_readings.push(g);
+                b_readings.push(b);
+            },
+            (r_result, g_result, b_result) => {
+                log::warn!("Failed to read RGB sensor during baseline - R: {:?}, G: {:?}, B: {:?}", r_result, g_result, b_result);
+                continue;
+            }
+        }
+        FreeRtos.delay_ms(sample_delay);
+    }
+
+    if r_readings.is_empty() {
+        log::error!("No valid RGB readings obtained, using default values");
+        return (100, 100, 100); // Default fallback values
+    }
+
+    // Calculate median values
+    r_readings.sort();
+    g_readings.sort();
+    b_readings.sort();
+    
+    let r_median = r_readings[r_readings.len() / 2];
+    let g_median = g_readings[g_readings.len() / 2];
+    let b_median = b_readings[b_readings.len() / 2];
+
+    log::info!("RGB baseline readings - R: {:?}", r_readings);
+    log::info!("RGB baseline readings - G: {:?}", g_readings);
+    log::info!("RGB baseline readings - B: {:?}", b_readings);
+    log::info!("RGB baseline final: R={}, G={}, B={}", r_median, g_median, b_median);
+
+    (r_median, g_median, b_median)
+}
+
 pub async fn serial_connection<'a>(
     conn: &mut UsbSerialDriver<'static>,
-    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
+    rgb_baseline: (u16, u16, u16),
+    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     ws2812: Arc<Mutex<LedType<'a>>>,
@@ -381,7 +438,7 @@ pub async fn serial_connection<'a>(
             )
             .await
             .unwrap();
-            // println!("Checking for filament");
+            
             if !is_filament_inserted {
                 embassy_time::Timer::after_millis(300).await;
                 continue;
@@ -390,16 +447,22 @@ pub async fn serial_connection<'a>(
 
             let reading = routes::read_averaged_data(
                 veml.clone(),
+                veml_rgb.clone(),
                 dark_baseline_reading,
                 baseline_reading,
+                rgb_baseline,
+                dark_rgb_baseline,
                 wifi_status.clone(),
                 led_light.clone(),
                 ws2812.clone(),
                 saved_algorithm,
             )
             .await;
-        set_led(ws2812.clone(), 255, 30, 255);
-        let reading_float = reading.unwrap().parse::<f32>().unwrap();
+            
+            set_led(ws2812.clone(), 255, 30, 255);
+            let reading_string = reading.unwrap();
+            let reading_parts: Vec<&str> = reading_string.split(',').collect();
+            let reading_float = reading_parts[0].parse::<f32>().unwrap();
             let message = format!(
                 "{},,,,{:.1},000000\n",
                 generate_random_11_digit_number(),
@@ -432,9 +495,12 @@ pub async fn serial_connection<'a>(
 #[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
-    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
+    rgb_baseline: (u16, u16, u16),
+    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
@@ -450,8 +516,11 @@ pub async fn run<'a>(
 
     let handler = WsHandler {
         veml,
+        veml_rgb,
         dark_baseline_reading,
         baseline_reading,
+        rgb_baseline,
+        dark_rgb_baseline,
         wifi_status,
         led_light,
         nvs,
@@ -483,9 +552,12 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
 
 struct WsHandler<'a> {
-    veml: Arc<Mutex<Veml7700<I2cDriver<'a>>>>,
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
+    rgb_baseline: (u16, u16, u16),
+    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
@@ -562,7 +634,7 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
     )
 }
 
-fn take_baseline_reading(veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>) -> f32 {
+fn take_baseline_reading(veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>) -> f32 {
     let sample_count = 30;
     let sample_delay = 50u32;
     let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);

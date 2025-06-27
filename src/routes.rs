@@ -12,7 +12,7 @@ use embedded_hal::pwm::SetDutyCycle;
 use embedded_io_async::{Read, Write};
 use embedded_svc::http::client::Client;
 use esp_idf_svc::{
-    hal::{i2c::I2cDriver, ledc::LedcDriver, reset},
+    hal::{ledc::LedcDriver, reset},
     http::{client::EspHttpConnection, Method},
     io::Write as _,
 };
@@ -21,9 +21,10 @@ use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers::{self, read_spoolman_data, NvsData},
+    helpers::{self, read_spoolman_data, NvsData, SharedI2cInstance},
     led::set_led,
     serve_algo_setup_page, serve_wifi_setup_page,
+    veml3328,
     wifi::{self, WifiEnum},
     EdgeError, LedType, WsHandler, WsHandlerError,
 };
@@ -403,8 +404,11 @@ impl WsHandler<'_> {
     {
         let data = read_data(
             self.veml.clone(),
+            self.veml_rgb.clone(),
             self.dark_baseline_reading,
             self.baseline_reading,
+            self.rgb_baseline,
+            self.dark_rgb_baseline,
             self.wifi_status.clone(),
             self.led_light.clone(),
             self.ws2812b.clone(),
@@ -429,8 +433,11 @@ impl WsHandler<'_> {
     {
         let data = read_averaged_data(
             self.veml.clone(),
+            self.veml_rgb.clone(),
             self.dark_baseline_reading,
             self.baseline_reading,
+            self.rgb_baseline,
+            self.dark_rgb_baseline,
             self.wifi_status.clone(),
             self.led_light.clone(),
             self.ws2812b.clone(),
@@ -444,10 +451,10 @@ impl WsHandler<'_> {
         Ok(())
     }
 }
+
 impl WsHandler<'_> {
     pub async fn ws_handler<T, const N: usize>(
         &self,
-        // headers: &edge_http::RequestHeaders<'_, N>,
         conn: &mut Connection<'_, T, N>,
     ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
     where
@@ -491,8 +498,11 @@ impl WsHandler<'_> {
 
             let td_value = read_data(
                 self.veml.clone(),
+                self.veml_rgb.clone(),
                 self.dark_baseline_reading,
                 self.baseline_reading,
+                self.rgb_baseline,
+                self.dark_rgb_baseline,
                 self.wifi_status.clone(),
                 self.led_light.clone(),
                 self.ws2812b.clone(),
@@ -519,10 +529,42 @@ impl WsHandler<'_> {
     }
 }
 
+fn normalize_rgb_value(value: u16, baseline: u16) -> u8 {
+    if baseline == 0 {
+        return 0;
+    }
+    
+    // Scale to 0-255 range, with some amplification for visibility
+    let scaled = ((value as f32 / baseline as f32) * 180.0).round() as u16;
+    (scaled.min(255)) as u8
+}
+
+pub async fn is_filament_inserted_dark(
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    dark_baseline_reading: f32,
+    saved_algorithm: NvsData,
+) -> Result<bool, anyhow::Error> {
+    let mut locked_veml = veml.lock().unwrap();
+    let clr = match locked_veml.read_lux() {
+        Ok(d) => d,
+        Err(e) => {
+            log::error!("Failed to read sensor: {:?}", e);
+            return Err(anyhow::anyhow!("Sensor read failed"));
+        }
+    };
+    let reading = clr as f32;
+
+    // Return true if filament is inserted (reading is below threshold)
+    Ok(reading / dark_baseline_reading <= saved_algorithm.threshold)
+}
+
 async fn read_data(
-    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
+    rgb_baseline: (u16, u16, u16),
+    _dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
@@ -536,10 +578,6 @@ async fn read_data(
             return None;
         }
     };
-    // let r = locked_veml.read_red().unwrap();
-    // let g = locked_veml.read_green().unwrap();
-    // let b = locked_veml.read_blue().unwrap();
-    // let reading = (clr * r * g * b) as f32;
     let reading = clr as f32;
 
     let ws_message: String;
@@ -562,7 +600,8 @@ async fn read_data(
                 return None;
             }
         }
-        embassy_time::Timer::after_millis(5).await; // Short delay before measuring again
+        embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
+        
         let clr = match locked_veml.read_lux() {
             Ok(d) => d,
             Err(e) => {
@@ -570,15 +609,33 @@ async fn read_data(
                 return None;
             }
         };
-        // let r = locked_veml.read_red().unwrap();
-        // let g = locked_veml.read_green().unwrap();
-        // let b = locked_veml.read_blue().unwrap();
-        // let reading = (clr * r * g * b) as f32;
         let reading = clr as f32;
+
+        // Read RGB values
+        let (r_raw, g_raw, b_raw) = {
+            let mut locked_rgb = veml_rgb.lock().unwrap();
+            match (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
+                (Ok(r), Ok(g), Ok(b)) => (r, g, b),
+                _ => {
+                    log::warn!("Failed to read RGB sensor, using defaults");
+                    (rgb_baseline.0, rgb_baseline.1, rgb_baseline.2)
+                }
+            }
+        };
 
         let td_value = (reading / baseline_reading) * 100.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-        ws_message = adjusted_td_value.to_string();
+        
+        // Normalize RGB values to 0-255 range
+        let r_norm = normalize_rgb_value(r_raw, rgb_baseline.0);
+        let g_norm = normalize_rgb_value(g_raw, rgb_baseline.1);
+        let b_norm = normalize_rgb_value(b_raw, rgb_baseline.2);
+        
+        // Create hex color string
+        let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+        
+        ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
+        
         {
             let mut led = led_light.lock().unwrap();
             if let Err(e) = led.set_duty(25) {
@@ -586,32 +643,20 @@ async fn read_data(
             }
         }
 
-        log::info!("Reading: {}", td_value);
+        log::info!("Reading: {}, RGB: {} (raw: {},{},{})", td_value, hex_color, r_raw, g_raw, b_raw);
     }
     Some(ws_message)
-}
-
-pub async fn is_filament_inserted_dark(
-    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
-    dark_baseline_reading: f32,
-    saved_algorithm: NvsData,
-) -> Result<bool, ()> {
-    let reading = match veml.lock().unwrap().read_lux() {
-        Ok(r) => r,
-        Err(e) => {
-            log::error!("Failed to read sensor: {:?}", e);
-            return Err(());
-        }
-    };
-    Ok(!(reading / dark_baseline_reading > saved_algorithm.threshold))
 }
 
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 50;
 pub async fn read_averaged_data(
-    veml: Arc<Mutex<Veml7700<I2cDriver<'_>>>>,
+    veml: Arc<Mutex<Veml7700<SharedI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SharedI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
+    rgb_baseline: (u16, u16, u16),
+    _dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
@@ -625,10 +670,6 @@ pub async fn read_averaged_data(
             return None;
         }
     };
-    // let r = locked_veml.read_red().unwrap();
-    // let g = locked_veml.read_green().unwrap();
-    // let b = locked_veml.read_blue().unwrap();
-    // let reading = (clr * r * g * b) as f32;
     let reading = clr as f32;
 
     let ws_message: String;
@@ -652,32 +693,43 @@ pub async fn read_averaged_data(
             }
         }
         let mut readings: Vec<f32> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
-        embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
+        let mut r_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
+        let mut g_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
+        let mut b_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
+        
+        embassy_time::Timer::after_millis(10).await;
+        
         for _ in 0..AVERAGE_SAMPLE_RATE {
             let clr = match locked_veml.read_lux() {
                 Ok(d) => d,
                 Err(e) => {
                     log::error!("Failed to read sensor: {:?}", e);
-                    return None;
+                    continue;
                 }
             };
             readings.push(clr as f32);
-            // let r = locked_veml.read_red().unwrap();
-            // let g = locked_veml.read_green().unwrap();
-            // let b = locked_veml.read_blue().unwrap();
-            // readings_summed_up += (clr * r * g * b) as f32;
+            
+            // Read RGB values
+            let mut locked_rgb = veml_rgb.lock().unwrap();
+            if let (Ok(r), Ok(g), Ok(b)) = (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
+                r_readings.push(r);
+                g_readings.push(g);
+                b_readings.push(b);
+            }
+            
             embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
         }
+        
         {
             let mut led = led_light.lock().unwrap();
             if let Err(e) = led.set_duty(25) {
                 log::error!("Failed to adjust LED duty: {:?}", e);
             }
         }
+        
         log::debug!("Raw readings: {:?}", readings);
 
-        // Calculate mean, std, and median
-        // Outlier removal
+        // Calculate mean, std, and median for lux values
         let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
         let std = (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
         let filtered: Vec<f32> = readings
@@ -686,7 +738,7 @@ pub async fn read_averaged_data(
             .collect();
 
         let median = if filtered.is_empty() {
-            mean // fallback to mean if all filtered out
+            mean
         } else {
             let mut filtered = filtered;
             filtered.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -697,11 +749,42 @@ pub async fn read_averaged_data(
                 filtered[filtered.len() / 2]
             }
         };
+        
+        // Calculate RGB medians
+        let r_median = if !r_readings.is_empty() {
+            r_readings.sort();
+            r_readings[r_readings.len() / 2]
+        } else {
+            rgb_baseline.0
+        };
+        
+        let g_median = if !g_readings.is_empty() {
+            g_readings.sort();
+            g_readings[g_readings.len() / 2]
+        } else {
+            rgb_baseline.1
+        };
+        
+        let b_median = if !b_readings.is_empty() {
+            b_readings.sort();
+            b_readings[b_readings.len() / 2]
+        } else {
+            rgb_baseline.2
+        };
+        
         let td_value = (median / baseline_reading) * 10.0;
         let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-        ws_message = adjusted_td_value.to_string();
+        
+        // Normalize RGB values
+        let r_norm = normalize_rgb_value(r_median, rgb_baseline.0);
+        let g_norm = normalize_rgb_value(g_median, rgb_baseline.1);
+        let b_norm = normalize_rgb_value(b_median, rgb_baseline.2);
+        
+        let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+        
+        ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
 
-        log::info!("Reading: {}", td_value);
+        log::info!("Reading: {}, RGB: {}", td_value, hex_color);
     }
     Some(ws_message)
 }
