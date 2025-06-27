@@ -23,6 +23,7 @@ use veml7700::Veml7700;
 use crate::{
     helpers::{self, read_spoolman_data, NvsData, HardwareI2cInstance, SimpleBitBangI2cInstance},
     led::set_led,
+    median_buffer::{RunningMedianBuffer, RunningMedianBufferU16},
     serve_algo_setup_page, serve_wifi_setup_page,
     veml3328,
     wifi::{self, WifiEnum},
@@ -402,7 +403,7 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let data = read_data(
+        let data = read_data_with_buffer(
             self.veml.clone(),
             self.veml_rgb.clone(),
             self.dark_baseline_reading,
@@ -413,6 +414,8 @@ impl WsHandler<'_> {
             self.led_light.clone(),
             self.ws2812b.clone(),
             self.saved_algorithm,
+            self.lux_buffer.clone(),
+            self.rgb_buffers.clone(),
         )
         .await
         .unwrap_or_default();
@@ -431,7 +434,7 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let data = read_averaged_data(
+        let data = read_averaged_data_with_buffer(
             self.veml.clone(),
             self.veml_rgb.clone(),
             self.dark_baseline_reading,
@@ -442,6 +445,8 @@ impl WsHandler<'_> {
             self.led_light.clone(),
             self.ws2812b.clone(),
             self.saved_algorithm,
+            self.lux_buffer.clone(),
+            self.rgb_buffers.clone(),
         )
         .await
         .unwrap_or_default();
@@ -496,7 +501,7 @@ impl WsHandler<'_> {
                 .await
                 .map_err(WsHandlerError::Ws)?;
 
-            let td_value = read_data(
+            let td_value = read_data_with_buffer(
                 self.veml.clone(),
                 self.veml_rgb.clone(),
                 self.dark_baseline_reading,
@@ -507,6 +512,8 @@ impl WsHandler<'_> {
                 self.led_light.clone(),
                 self.ws2812b.clone(),
                 self.saved_algorithm,
+                self.lux_buffer.clone(),
+                self.rgb_buffers.clone(),
             )
             .await;
             let payload = match td_value {
@@ -524,7 +531,7 @@ impl WsHandler<'_> {
                 .send_payload(&mut socket, payload.as_ref())
                 .await
                 .map_err(WsHandlerError::Ws)?;
-            embassy_time::Timer::after_millis(500).await;
+            embassy_time::Timer::after_millis(125).await; // Increased rate by 4x (was 500ms)
         }
     }
 }
@@ -565,149 +572,133 @@ fn apply_white_balance_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, 
     let g_corrected = (g as f32 * g_factor).round() as u16;
     let b_corrected = (b as f32 * b_factor).round() as u16;
 
-    // Find the maximum corrected value to use for scaling to 0-255
+    // Find the maximum corrected value to determine if scaling is needed
     let max_corrected = r_corrected.max(g_corrected).max(b_corrected);
 
-    // Scale to 0-255 range, with some amplification for better visibility
-    let scale_factor = if max_corrected > 0 {
-        (255.0 * 1.0) / max_corrected as f32  // Use 80% of full scale for headroom
+    // Only scale to 0-255 range if any value exceeds 255
+    let (r_final, g_final, b_final) = if max_corrected > 255 {
+        let scale_factor = 255.0 / max_corrected as f32;
+        let r_scaled = ((r_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+        let g_scaled = ((g_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+        let b_scaled = ((b_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
+        (r_scaled, g_scaled, b_scaled)
     } else {
-        1.0
+        // Keep original corrected values if all are within 0-255 range
+        (r_corrected as u8, g_corrected as u8, b_corrected as u8)
     };
 
-    let r_final = ((r_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-    let g_final = ((g_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-    let b_final = ((b_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-
-    log::debug!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}",
-               r, r_final, g, g_final, b, b_final, r_factor, g_factor, b_factor);
+    log::debug!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}, max={}, scaled={}",
+               r, r_final, g, g_final, b, b_final, r_factor, g_factor, b_factor, max_corrected, max_corrected > 255);
 
     (r_final, g_final, b_final)
 }
 
-pub async fn is_filament_inserted_dark(
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    dark_baseline_reading: f32,
-    saved_algorithm: NvsData,
-) -> Result<bool, anyhow::Error> {
-    let mut locked_veml = veml.lock().unwrap();
-    let clr = match locked_veml.read_lux() {
-        Ok(d) => d,
-        Err(e) => {
-            log::error!("Failed to read sensor: {:?}", e);
-            return Err(anyhow::anyhow!("Sensor read failed"));
-        }
-    };
-    let reading = clr as f32;
+fn apply_brightness_correction(
+    r: u16, g: u16, b: u16,
+    wb_r: u16, wb_g: u16, wb_b: u16,
+    clear: u16, wb_clear: u16
+) -> (u8, u8, u8) {
+    // First apply white balance correction
+    let (r_wb, g_wb, b_wb) = apply_white_balance_correction(r, g, b, wb_r, wb_g, wb_b);
 
-    // Return true if filament is inserted (reading is below threshold)
-    Ok(reading / dark_baseline_reading <= saved_algorithm.threshold)
+    // Calculate transmission ratio from clear channel
+    let transmission_ratio = if wb_clear > 0 {
+        (clear as f32 / wb_clear as f32).min(1.0).max(0.01) // Clamp between 1% and 100%
+    } else {
+        1.0
+    };
+
+    log::debug!("Transmission ratio: {:.3} (clear: {}, wb_clear: {})",
+               transmission_ratio, clear, wb_clear);
+
+    // If transmission is very low, the plastic is very dark/thick
+    // We need to boost the color intensity to compensate
+    let brightness_boost = if transmission_ratio < 0.1 {
+        // For very dark plastic (< 10% transmission), apply strong boost
+        1.0 / transmission_ratio.max(0.05) // Cap boost at 20x
+    } else if transmission_ratio < 0.5 {
+        // For medium darkness (10-50% transmission), apply moderate boost
+        1.0 / transmission_ratio.powf(0.7) // Less aggressive boost
+    } else {
+        // For light plastic (> 50% transmission), minimal or no boost
+        1.0 / transmission_ratio.powf(0.3)
+    };
+
+    // Apply brightness correction while preserving color ratios
+    let r_corrected = (r_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
+    let g_corrected = (g_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
+    let b_corrected = (b_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
+
+    log::debug!("Brightness correction: boost={:.2}, RGB({},{},{}) -> ({},{},{})",
+               brightness_boost, r_wb, g_wb, b_wb, r_corrected, g_corrected, b_corrected);
+
+    (r_corrected, g_corrected, b_corrected)
 }
 
+fn apply_adaptive_brightness_correction(
+    r: u16, g: u16, b: u16, clear: u16,
+    wb_r: u16, wb_g: u16, wb_b: u16, wb_clear: u16
+) -> (u8, u8, u8) {
+    // Apply white balance correction only - no aggressive brightness correction
+    let (r_wb, g_wb, b_wb) = apply_white_balance_correction(r, g, b, wb_r, wb_g, wb_b);
+
+    log::debug!("Raw RGB: ({},{},{}), WB corrected: ({},{},{}), Clear: {}, WB Clear est: {}",
+               r, g, b, r_wb, g_wb, b_wb, clear, wb_clear);
+
+    // Check if the values are already reasonable after white balance
+    let max_val = r_wb.max(g_wb).max(b_wb);
+
+    // Only apply very minimal correction if all values are extremely low
+    if max_val < 10 {
+        // Apply a very conservative boost only for extremely dark readings
+        let gentle_boost = 2.0; // Maximum 2x boost
+
+        let r_final = (r_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
+        let g_final = (g_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
+        let b_final = (b_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
+
+        log::debug!("Applied minimal boost for very dark reading: {:.2} -> RGB({},{},{})",
+                   gentle_boost, r_final, g_final, b_final);
+
+        return (r_final, g_final, b_final);
+    }
+
+    // For all other cases, just use the white balance corrected values
+    log::debug!("Using white balance corrected values directly: RGB({},{},{})",
+               r_wb, g_wb, b_wb);
+
+    (r_wb, g_wb, b_wb)
+}
+
+// Keep old function for compatibility but redirect to new buffered version
 async fn read_data(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),  // Now represents white balance values
-    _dark_rgb_baseline: (u16, u16, u16),
+    rgb_white_balance: (u16, u16, u16),
+    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
-    let mut locked_veml = veml.lock().unwrap();
-    let clr = match locked_veml.read_lux() {
-        Ok(d) => d,
-        Err(e) => {
-            log::error!("Failed to read sensor: {:?}", e);
-            return None;
-        }
-    };
-    let reading = clr as f32;
+    // Create temporary buffers for compatibility - keep same size as main buffers
+    let lux_buffer = Arc::new(Mutex::new(RunningMedianBuffer::new(500)));
+    let rgb_buffers = Arc::new(Mutex::new((
+        RunningMedianBufferU16::new(500),
+        RunningMedianBufferU16::new(500),
+        RunningMedianBufferU16::new(500),
+    )));
 
-    let ws_message: String;
-    if reading / dark_baseline_reading > saved_algorithm.threshold {
-        let wifi_stat = wifi_status.lock().unwrap();
-        match *wifi_stat {
-            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-        }
-        //log::info!("No filament detected!");
-        ws_message = "no_filament".to_string();
-    } else {
-        log::info!("Filament detected!");
-        set_led(ws2812.clone(), 0, 125, 125);
-        {
-            let mut led = led_light.lock().unwrap();
-            if let Err(e) = led.set_duty_cycle_fully_on() {
-                log::error!("Failed to set LED duty cycle: {:?}", e);
-                return None;
-            }
-        }
-        embassy_time::Timer::after_millis(10).await; // Short delay before measuring again
-        
-        let clr = match locked_veml.read_lux() {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to read sensor: {:?}", e);
-                return None;
-            }
-        };
-        let reading = clr as f32;
-
-        // Read RGB values with white balance correction
-        let (r_raw, g_raw, b_raw) = {
-            let mut locked_rgb = veml_rgb.lock().unwrap();
-            embassy_time::Timer::after_millis(5).await; // Delay before RGB read
-            match (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
-                (Ok(r), Ok(g), Ok(b)) => {
-                    log::debug!("RGB raw values: R={}, G={}, B={}", r, g, b);
-                    (r, g, b)
-                },
-                _ => {
-                    log::warn!("Failed to read RGB sensor, using white balance defaults");
-                    (rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2)
-                }
-            }
-        };
-
-        let td_value = (reading / baseline_reading) * 100.0;
-        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-        
-        // Apply white balance correction to normalize RGB values
-        let (r_norm, g_norm, b_norm) = apply_white_balance_correction(
-            r_raw, g_raw, b_raw,
-            rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
-        );
-
-        // Create hex color string
-        let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
-        
-        ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
-        
-        {
-            let mut led = led_light.lock().unwrap();
-            if let Err(e) = led.set_duty(25) {
-                log::error!("Failed to adjust LED duty: {:?}", e);
-            }
-        }
-
-        {
-            let mut locked_veml = veml_rgb.lock().unwrap();
-            match locked_veml.read_all_registers() {
-                Ok(_) => log::info!("Register dump completed successfully"),
-                Err(e) => log::warn!("Register dump failed: {:?}", e),
-            }
-        }
-
-        log::info!("Reading: {}, RGB: {} (raw: {},{},{} -> corrected: {},{},{})",
-                  td_value, hex_color, r_raw, g_raw, b_raw, r_norm, g_norm, b_norm);
-    }
-    Some(ws_message)
+    read_data_with_buffer(
+        veml, veml_rgb, dark_baseline_reading, baseline_reading,
+        rgb_white_balance, dark_rgb_baseline, wifi_status, led_light,
+        ws2812, saved_algorithm, lux_buffer, rgb_buffers
+    ).await
 }
 
+// Keep old function for compatibility
 const AVERAGE_SAMPLE_RATE: i32 = 30;
 const AVERAGE_SAMPLE_DELAY: u64 = 50;
 pub async fn read_averaged_data(
@@ -715,25 +706,198 @@ pub async fn read_averaged_data(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),  // Now represents white balance values
-    _dark_rgb_baseline: (u16, u16, u16),
+    rgb_white_balance: (u16, u16, u16),
+    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
 ) -> Option<String> {
+    // Create temporary buffers for compatibility - keep same size as main buffers
+    let lux_buffer = Arc::new(Mutex::new(RunningMedianBuffer::new(500)));
+    let rgb_buffers = Arc::new(Mutex::new((
+        RunningMedianBufferU16::new(500),
+        RunningMedianBufferU16::new(500),
+        RunningMedianBufferU16::new(500),
+    )));
+
+    read_averaged_data_with_buffer(
+        veml, veml_rgb, dark_baseline_reading, baseline_reading,
+        rgb_white_balance, dark_rgb_baseline, wifi_status, led_light,
+        ws2812, saved_algorithm, lux_buffer, rgb_buffers
+    ).await
+}
+
+async fn read_data_with_buffer(
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    rgb_white_balance: (u16, u16, u16),
+    _dark_rgb_baseline: (u16, u16, u16),
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'_>>>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    saved_algorithm: NvsData,
+    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
+    rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
+) -> Option<String> {
+    // Take a quick reading first for fast filament detection
+    let current_reading = {
+        let mut locked_veml = veml.lock().unwrap();
+        match locked_veml.read_lux() {
+            Ok(d) => d as f32,
+            Err(e) => {
+                log::error!("Failed to read sensor: {:?}", e);
+                return None;
+            }
+        }
+    };
+
+    // Use current reading for fast "no filament" detection
+    if current_reading / dark_baseline_reading > saved_algorithm.threshold {
+        // Clear buffers when no filament is detected
+        {
+            let mut buffer = lux_buffer.lock().unwrap();
+            buffer.clear();
+        }
+        {
+            let mut buffers = rgb_buffers.lock().unwrap();
+            buffers.0.clear();
+            buffers.1.clear();
+            buffers.2.clear();
+        }
+
+        let wifi_stat = wifi_status.lock().unwrap();
+        match *wifi_stat {
+            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
+            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
+            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
+        }
+        return Some("no_filament".to_string());
+    }
+
+    // Filament is detected, now do proper measurement with median filtering
+    log::info!("Filament detected!");
+    set_led(ws2812.clone(), 0, 125, 125);
+    {
+        let mut led = led_light.lock().unwrap();
+        if let Err(e) = led.set_duty_cycle_fully_on() {
+            log::error!("Failed to set LED duty cycle: {:?}", e);
+            return None;
+        }
+    }
+
+    // Take multiple readings for median calculation - keep consistent count regardless of buffer size
+    let readings_per_call = 3;
+    for _ in 0..readings_per_call {
+        embassy_time::Timer::after_millis(5).await;
+        let mut locked_veml = veml.lock().unwrap();
+        if let Ok(clr) = locked_veml.read_lux() {
+            let mut buffer = lux_buffer.lock().unwrap();
+            buffer.push(clr as f32);
+        }
+
+        let mut locked_rgb = veml_rgb.lock().unwrap();
+        if let (Ok(r), Ok(g), Ok(b)) = (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
+            log::debug!("RGB readings: R={}, G={}, B={}", r, g, b);
+
+            let mut buffers = rgb_buffers.lock().unwrap();
+            buffers.0.push(r);
+            buffers.1.push(g);
+            buffers.2.push(b);
+        }
+    }
+
+    // Get median values for accurate measurement
+    let final_median_lux = {
+        let buffer = lux_buffer.lock().unwrap();
+        buffer.median().unwrap_or(current_reading)
+    };
+
+    let (r_median, g_median, b_median) = {
+        let buffers = rgb_buffers.lock().unwrap();
+        (
+            buffers.0.median().unwrap_or(rgb_white_balance.0),
+            buffers.1.median().unwrap_or(rgb_white_balance.1),
+            buffers.2.median().unwrap_or(rgb_white_balance.2),
+        )
+    };
+
+    // Keep TD calculation exactly as is
+    let td_value = (final_median_lux / baseline_reading) * 100.0;
+    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
+
+    // Read clear channel for brightness correction
+    let clear_median = {
+        let mut locked_rgb = veml_rgb.lock().unwrap();
+        locked_rgb.read_clear().unwrap_or(rgb_white_balance.0)
+    };
+
+    // Use a more conservative clear reference estimation
+    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 0.9;
+
+    log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est={:.0}",
+               r_median, g_median, b_median, clear_median,
+               rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate);
+
+    // Apply the corrected brightness function
+    let (r_norm, g_norm, b_norm) = apply_adaptive_brightness_correction(
+        r_median, g_median, b_median, clear_median,
+        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
+    );
+
+    // Create hex color string
+    let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+
+    let ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
+
+    {
+        let mut led = led_light.lock().unwrap();
+        if let Err(e) = led.set_duty(25) {
+            log::error!("Failed to adjust LED duty: {:?}", e);
+        }
+    }
+
+    // Log buffer status and detailed color information
+    let (lux_len, rgb_len) = {
+        let lux_buf = lux_buffer.lock().unwrap();
+        let rgb_buf = rgb_buffers.lock().unwrap();
+        (lux_buf.len(), rgb_buf.0.len())
+    };
+
+    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}",
+              td_value, hex_color, lux_len, rgb_len, r_median, g_median, b_median, r_norm, g_norm, b_norm, baseline_reading);
+
+    Some(ws_message)
+}
+
+pub async fn read_averaged_data_with_buffer(
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    rgb_white_balance: (u16, u16, u16),
+    _dark_rgb_baseline: (u16, u16, u16),
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'_>>>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    saved_algorithm: NvsData,
+    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
+    rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
+) -> Option<String> {
+    // Take a quick reading first for fast filament detection
     let mut locked_veml = veml.lock().unwrap();
-    let clr = match locked_veml.read_lux() {
-        Ok(d) => d,
+    let current_reading = match locked_veml.read_lux() {
+        Ok(d) => d as f32,
         Err(e) => {
             log::error!("Failed to read sensor: {:?}", e);
             return None;
         }
     };
-    let reading = clr as f32;
 
-    let ws_message: String;
-    if reading / dark_baseline_reading > saved_algorithm.threshold {
+    // Use current reading for fast "no filament" detection
+    if current_reading / dark_baseline_reading > saved_algorithm.threshold {
         let wifi_stat = wifi_status.lock().unwrap();
         match *wifi_stat {
             WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
@@ -741,112 +905,127 @@ pub async fn read_averaged_data(
             WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
         }
         log::info!("No filament detected!");
-        ws_message = "no_filament".to_string();
-    } else {
-        log::info!("Filament detected!");
-        set_led(ws2812.clone(), 0, 125, 125);
-        {
-            let mut led = led_light.lock().unwrap();
-            if let Err(e) = led.set_duty_cycle_fully_on() {
-                log::error!("Failed to set LED duty cycle: {:?}", e);
-                return None;
-            }
-        }
-        let mut readings: Vec<f32> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
-        let mut r_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
-        let mut g_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
-        let mut b_readings: Vec<u16> = Vec::with_capacity(AVERAGE_SAMPLE_RATE as usize);
-        
-        embassy_time::Timer::after_millis(10).await;
-        
-        for _ in 0..AVERAGE_SAMPLE_RATE {
-            let clr = match locked_veml.read_lux() {
-                Ok(d) => d,
-                Err(e) => {
-                    log::error!("Failed to read sensor: {:?}", e);
-                    continue;
-                }
-            };
-            readings.push(clr as f32);
-            
-            // Read RGB values
-            let mut locked_rgb = veml_rgb.lock().unwrap();
-            if let (Ok(r), Ok(g), Ok(b)) = (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
-                r_readings.push(r);
-                g_readings.push(g);
-                b_readings.push(b);
-            }
-            
-            embassy_time::Timer::after_millis(AVERAGE_SAMPLE_DELAY).await;
-        }
-        
-        {
-            let mut led = led_light.lock().unwrap();
-            if let Err(e) = led.set_duty(25) {
-                log::error!("Failed to adjust LED duty: {:?}", e);
-            }
-        }
-        
-        log::debug!("Raw readings: {:?}", readings);
-
-        // Calculate mean, std, and median for lux values
-        let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
-        let std = (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
-        let filtered: Vec<f32> = readings
-            .into_iter()
-            .filter(|v| (*v - mean).abs() <= 2.0 * std)
-            .collect();
-
-        let median = if filtered.is_empty() {
-            mean
-        } else {
-            let mut filtered = filtered;
-            filtered.sort_by(|a, b| a.partial_cmp(b).unwrap());
-            if filtered.len() % 2 == 0 {
-                let mid = filtered.len() / 2;
-                (filtered[mid - 1] + filtered[mid]) / 2.0
-            } else {
-                filtered[filtered.len() / 2]
-            }
-        };
-        
-        // Calculate RGB medians and apply white balance correction
-        let r_median = if !r_readings.is_empty() {
-            r_readings.sort();
-            r_readings[r_readings.len() / 2]
-        } else {
-            rgb_white_balance.0
-        };
-        
-        let g_median = if !g_readings.is_empty() {
-            g_readings.sort();
-            g_readings[g_readings.len() / 2]
-        } else {
-            rgb_white_balance.1
-        };
-        
-        let b_median = if !b_readings.is_empty() {
-            b_readings.sort();
-            b_readings[b_readings.len() / 2]
-        } else {
-            rgb_white_balance.2
-        };
-        
-        let td_value = (median / baseline_reading) * 10.0;
-        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-        
-        // Apply white balance correction
-        let (r_norm, g_norm, b_norm) = apply_white_balance_correction(
-            r_median, g_median, b_median,
-            rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
-        );
-
-        let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
-        
-        ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
-
-        log::info!("Reading: {}, RGB: {} (medians: {},{},{} -> corrected: {},{},{})",
-                  td_value, hex_color, r_median, g_median, b_median, r_norm, g_norm, b_norm);
+        return Some("no_filament".to_string());
     }
+
+    // Filament is detected, proceed with intensive sampling
+    log::info!("Filament detected!");
+    set_led(ws2812.clone(), 0, 125, 125);
+    {
+        let mut led = led_light.lock().unwrap();
+        if let Err(e) = led.set_duty_cycle_fully_on() {
+            log::error!("Failed to set LED duty cycle: {:?}", e);
+            return None;
+        }
+    }
+
+    // Clear buffers for fresh sampling
+    {
+        let mut buffer = lux_buffer.lock().unwrap();
+        buffer.clear();
+    }
+    {
+        let mut buffers = rgb_buffers.lock().unwrap();
+        buffers.0.clear();
+        buffers.1.clear();
+        buffers.2.clear();
+    }
+
+    embassy_time::Timer::after_millis(10).await;
+
+    // For averaged data, we'll take more intensive sampling
+    let sample_count = 100;
+    let mut clear_readings = Vec::with_capacity(sample_count);
+
+    // Take many rapid samples to fill the median buffer
+    for _ in 0..sample_count {
+        let clr = match locked_veml.read_lux() {
+            Ok(d) => d,
+            Err(e) => {
+                log::error!("Failed to read sensor: {:?}", e);
+                continue;
+            }
+        };
+
+        {
+            let mut buffer = lux_buffer.lock().unwrap();
+            buffer.push(clr as f32);
+        }
+
+        // Read RGB values
+        let mut locked_rgb = veml_rgb.lock().unwrap();
+        if let (Ok(r), Ok(g), Ok(b), Ok(clear)) = (
+            locked_rgb.read_red(),
+            locked_rgb.read_green(),
+            locked_rgb.read_blue(),
+            locked_rgb.read_clear()
+        ) {
+            let mut buffers = rgb_buffers.lock().unwrap();
+            buffers.0.push(r);
+            buffers.1.push(g);
+            buffers.2.push(b);
+            clear_readings.push(clear);
+        }
+
+        embassy_time::Timer::after_millis(12).await;
+    }
+
+    {
+        let mut led = led_light.lock().unwrap();
+        if let Err(e) = led.set_duty(25) {
+            log::error!("Failed to adjust LED duty: {:?}", e);
+        }
+    }
+
+    // Get median values from the filled buffers
+    let median = {
+        let buffer = lux_buffer.lock().unwrap();
+        buffer.median().unwrap_or(current_reading)
+    };
+
+    let (r_median, g_median, b_median) = {
+        let buffers = rgb_buffers.lock().unwrap();
+        (
+            buffers.0.median().unwrap_or(rgb_white_balance.0),
+            buffers.1.median().unwrap_or(rgb_white_balance.1),
+            buffers.2.median().unwrap_or(rgb_white_balance.2),
+        )
+    };
+
+    // Calculate clear median
+    let clear_median = if !clear_readings.is_empty() {
+        clear_readings.sort();
+        clear_readings[clear_readings.len() / 2]
+    } else {
+        rgb_white_balance.0 // Fallback
+    };
+
+    // Keep TD calculation exactly as is
+    let td_value = (median / baseline_reading) * 10.0;
+    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
+
+    // Use a more conservative clear reference estimation
+    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 0.9;
+
+    // Apply the corrected brightness function
+    let (r_norm, g_norm, b_norm) = apply_adaptive_brightness_correction(
+        r_median, g_median, b_median, clear_median,
+        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
+    );
+
+    let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+
+    let ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
+
+    let (lux_len, rgb_len) = {
+        let lux_buf = lux_buffer.lock().unwrap();
+        let rgb_buf = rgb_buffers.lock().unwrap();
+        (lux_buf.len(), rgb_buf.0.len())
+    };
+
+    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{})",
+              td_value, hex_color, lux_len, rgb_len, r_median, g_median, b_median, r_norm, g_norm, b_norm);
+
     Some(ws_message)
 }
+

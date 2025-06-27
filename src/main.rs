@@ -52,6 +52,7 @@ use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 
 mod helpers;
 mod led;
+mod median_buffer;
 mod routes;
 mod veml3328;
 mod wifi;
@@ -331,6 +332,7 @@ fn take_rgb_white_balance_calibration(
     let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut g_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
+    let mut clear_readings: Vec<u16> = Vec::with_capacity(sample_count);
 
     log::info!("Starting RGB white balance calibration at full LED brightness with {} samples", sample_count);
 
@@ -359,15 +361,17 @@ fn take_rgb_white_balance_calibration(
 
     for i in 0..sample_count {
         let mut locked_veml = veml_rgb.lock().unwrap();
-        match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue()) {
-            (Ok(r), Ok(g), Ok(b)) => {
-                log::debug!("White balance sample {}: R={}, G={}, B={}", i, r, g, b);
+        match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue(), locked_veml.read_clear()) {
+            (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
+                log::debug!("White balance sample {}: R={}, G={}, B={}, Clear={}", i, r, g, b, clear);
                 r_readings.push(r);
                 g_readings.push(g);
                 b_readings.push(b);
+                clear_readings.push(clear);
             },
-            (r_result, g_result, b_result) => {
-                log::warn!("Failed to read RGB sensor during white balance - R: {:?}, G: {:?}, B: {:?}", r_result, g_result, b_result);
+            (r_result, g_result, b_result, clear_result) => {
+                log::warn!("Failed to read RGB sensor during white balance - R: {:?}, G: {:?}, B: {:?}, Clear: {:?}",
+                          r_result, g_result, b_result, clear_result);
                 continue;
             }
         }
@@ -384,10 +388,16 @@ fn take_rgb_white_balance_calibration(
     r_readings.sort();
     g_readings.sort();
     b_readings.sort();
-    
+    clear_readings.sort();
+
     let r_median = r_readings[r_readings.len() / 2];
     let g_median = g_readings[g_readings.len() / 2];
     let b_median = b_readings[b_readings.len() / 2];
+    let clear_median = if !clear_readings.is_empty() {
+        clear_readings[clear_readings.len() / 2]
+    } else {
+        r_median + g_median + b_median // Estimate if clear failed
+    };
 
     // Calculate relative intensities for logging
     let min_intensity = r_median.min(g_median).min(b_median) as f32;
@@ -395,11 +405,23 @@ fn take_rgb_white_balance_calibration(
     let g_ratio = g_median as f32 / min_intensity;
     let b_ratio = b_median as f32 / min_intensity;
 
+    // Calculate clear channel ratio for better reference estimation
+    let rgb_sum = r_median + g_median + b_median;
+    let clear_ratio = if rgb_sum > 0 {
+        clear_median as f32 / rgb_sum as f32
+    } else {
+        0.0
+    };
+
     log::info!("RGB white balance readings - R: {:?}", r_readings);
     log::info!("RGB white balance readings - G: {:?}", g_readings);
     log::info!("RGB white balance readings - B: {:?}", b_readings);
-    log::info!("RGB white balance final (full LED): R={}, G={}, B={}", r_median, g_median, b_median);
-    log::info!("Channel intensity ratios (relative to weakest): R={:.2}x, G={:.2}x, B={:.2}x", r_ratio, g_ratio, b_ratio);
+    log::info!("Clear white balance readings: {:?}", clear_readings);
+    log::info!("RGB white balance final (full LED): R={}, G={}, B={}, Clear={}",
+              r_median, g_median, b_median, clear_median);
+    log::info!("Channel intensity ratios (relative to weakest): R={:.2}x, G={:.2}x, B={:.2}x",
+              r_ratio, g_ratio, b_ratio);
+    log::info!("Clear/RGB ratio: {:.3} (will use 0.9 as estimate for corrections)", clear_ratio);
 
     (r_median, g_median, b_median)
 }
@@ -423,6 +445,15 @@ pub async fn serial_connection<'a>(
     let channel = Channel::<NoopRawMutex, String, 1>::new();
     let recv = channel.receiver();
     let send = channel.sender();
+
+    // Create median buffers for serial connection
+    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50)));
+    let rgb_buffers = Arc::new(Mutex::new((
+        median_buffer::RunningMedianBufferU16::new(50),
+        median_buffer::RunningMedianBufferU16::new(50),
+        median_buffer::RunningMedianBufferU16::new(50),
+    )));
+
     let conn_loop = async {
         loop {
             // Step 1: Wait for "connect\n" from Python script
@@ -471,21 +502,26 @@ pub async fn serial_connection<'a>(
                 continue;
             }
             set_led(ws2812.clone(), 100, 30, 255);
-            let is_filament_inserted = routes::is_filament_inserted_dark(
-                veml.clone(),
-                dark_baseline_reading,
-                saved_algorithm,
-            )
-            .await
-            .unwrap();
-            
+
+            // Use fast current reading for filament detection
+            let is_filament_inserted = {
+                let mut locked_veml = veml.lock().unwrap();
+                match locked_veml.read_lux() {
+                    Ok(reading) => {
+                        let current_reading = reading as f32;
+                        current_reading / dark_baseline_reading <= saved_algorithm.threshold
+                    },
+                    Err(_) => false,
+                }
+            };
+
             if !is_filament_inserted {
                 embassy_time::Timer::after_millis(300).await;
                 continue;
             }
             embassy_time::Timer::after_millis(300).await;
 
-            let reading = routes::read_averaged_data(
+            let reading = routes::read_averaged_data_with_buffer(
                 veml.clone(),
                 veml_rgb.clone(),
                 dark_baseline_reading,
@@ -496,6 +532,8 @@ pub async fn serial_connection<'a>(
                 led_light.clone(),
                 ws2812.clone(),
                 saved_algorithm,
+                lux_buffer.clone(),
+                rgb_buffers.clone(),
             )
             .await;
             
@@ -512,20 +550,26 @@ pub async fn serial_connection<'a>(
 
             embassy_time::Timer::after_millis(300).await;
             loop {
-                embassy_time::Timer::after_millis(150).await;
-                let is_filament_inserted = routes::is_filament_inserted_dark(
-                    veml.clone(),
-                    dark_baseline_reading,
-                    saved_algorithm,
-                )
-                .await
-                .unwrap();
+                embassy_time::Timer::after_millis(50).await; // Much faster polling for filament removal
+
+                // Use fast current reading for filament removal detection
+                let is_filament_inserted = {
+                    let mut locked_veml = veml.lock().unwrap();
+                    match locked_veml.read_lux() {
+                        Ok(reading) => {
+                            let current_reading = reading as f32;
+                            current_reading / dark_baseline_reading <= saved_algorithm.threshold
+                        },
+                        Err(_) => false,
+                    }
+                };
+
                 if !is_filament_inserted {
                     break;
                 }
             }
 
-            embassy_time::Timer::after_millis(100).await; // Prevent excessive polling
+            embassy_time::Timer::after_millis(100).await;
         }
     };
     embassy_futures::join::join(measurement_loop, conn_loop).await;
@@ -566,6 +610,13 @@ pub async fn run<'a>(
         nvs,
         ws2812b,
         saved_algorithm,
+        // Initialize median buffers
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))),
+        rgb_buffers: Arc::new(Mutex::new((
+            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(50),
+        ))),
     };
     match server.run(None, acceptor, handler).await {
         Ok(_) => (),
@@ -603,6 +654,13 @@ struct WsHandler<'a> {
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     ws2812b: Arc<Mutex<LedType<'a>>>,
     saved_algorithm: NvsData,
+    // Add median buffers
+    lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
+    rgb_buffers: Arc<Mutex<(
+        median_buffer::RunningMedianBufferU16,
+        median_buffer::RunningMedianBufferU16,
+        median_buffer::RunningMedianBufferU16,
+    )>>,
 }
 
 impl Handler for WsHandler<'_> {
