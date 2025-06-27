@@ -88,15 +88,18 @@ where
             }
         };
 
-        // Power on both SD0 and SD1 (clear bits 0 and 15)
-        let new_config_bits = current_config & !0x8001; // Clear shutdown bits
+        // Configure for optimal color measurement
+        // Set integration time to 100ms (bits 6-4 = 010) for better accuracy
+        // Keep gain at 1x (bits 12-11 = 00) for normal sensitivity
+        // Clear shutdown bits (bits 15 and 0)
+        let new_config_bits = (current_config & !0x8071) | 0x0020; // Clear shutdown and set 100ms integration time
         let config = Config { bits: new_config_bits };
 
-        log::info!("Writing config: 0x{:04X}", config.bits);
+        log::info!("Writing optimized config for color measurement: 0x{:04X}", config.bits);
         self.set_config(config)?;
 
-        // Add delay for sensor to stabilize
-        std::thread::sleep(std::time::Duration::from_millis(50)); // Longer delay
+        // Add longer delay for sensor to stabilize with new settings
+        std::thread::sleep(std::time::Duration::from_millis(150));
 
         // Verify configuration was written
         let read_config = self.read_register(Register::CONFIG)?;
@@ -105,6 +108,18 @@ where
         // Verify device ID again after configuration
         let final_id = self.read_register(Register::ID_DATA)?;
         log::info!("VEML3328 Device ID after enable: 0x{:04X}", final_id);
+
+        // Take a few test readings to verify sensor is working
+        std::thread::sleep(std::time::Duration::from_millis(110)); // Wait for integration time
+        match (self.read_register(Register::R_DATA), self.read_register(Register::G_DATA), self.read_register(Register::B_DATA)) {
+            (Ok(r), Ok(g), Ok(b)) => {
+                log::info!("Initial color readings after enable: R={}, G={}, B={}", r, g, b);
+                if r == 0 && g == 0 && b == 0 {
+                    log::warn!("All color readings are zero - sensor might not be working properly");
+                }
+            },
+            _ => log::warn!("Could not read initial color values after enable"),
+        }
 
         Ok(())
     }

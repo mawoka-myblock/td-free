@@ -327,8 +327,8 @@ fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>
 ) -> (u16, u16, u16) {
-    let sample_count = 15;
-    let sample_delay = 150u32;
+    let sample_count = 30;
+    let sample_delay = 100u32;
     let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut g_readings: Vec<u16> = Vec::with_capacity(sample_count);
     let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
@@ -336,15 +336,10 @@ fn take_rgb_white_balance_calibration(
 
     log::info!("Starting RGB white balance calibration at full LED brightness with {} samples", sample_count);
 
-    // Set LED to full brightness for white balance calibration
+    // Set LED to 25 brightness for white balance calibration
     {
         let mut led = led_light.lock().unwrap();
-        if let Err(e) = led.set_duty_cycle_fully_on() {
-            log::error!("Failed to set LED to full brightness for white balance: {:?}", e);
-            // Fallback to raw duty value
-            let max_duty = led.get_max_duty();
-            led.set_duty(max_duty).unwrap_or_default();
-        }
+        led.set_duty(25).unwrap();
     }
 
     // Wait for LED to stabilize

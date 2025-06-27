@@ -587,7 +587,7 @@ fn apply_white_balance_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, 
         (r_corrected as u8, g_corrected as u8, b_corrected as u8)
     };
 
-    log::debug!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}, max={}, scaled={}",
+    log::info!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}, max={}, scaled={}",
                r, r_final, g, g_final, b, b_final, r_factor, g_factor, b_factor, max_corrected, max_corrected > 255);
 
     (r_final, g_final, b_final)
@@ -608,7 +608,7 @@ fn apply_brightness_correction(
         1.0
     };
 
-    log::debug!("Transmission ratio: {:.3} (clear: {}, wb_clear: {})",
+    log::info!("Transmission ratio: {:.3} (clear: {}, wb_clear: {})",
                transmission_ratio, clear, wb_clear);
 
     // If transmission is very low, the plastic is very dark/thick
@@ -629,7 +629,7 @@ fn apply_brightness_correction(
     let g_corrected = (g_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
     let b_corrected = (b_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
 
-    log::debug!("Brightness correction: boost={:.2}, RGB({},{},{}) -> ({},{},{})",
+    log::info!("Brightness correction: boost={:.2}, RGB({},{},{}) -> ({},{},{})",
                brightness_boost, r_wb, g_wb, b_wb, r_corrected, g_corrected, b_corrected);
 
     (r_corrected, g_corrected, b_corrected)
@@ -642,7 +642,7 @@ fn apply_adaptive_brightness_correction(
     // Apply white balance correction only - no aggressive brightness correction
     let (r_wb, g_wb, b_wb) = apply_white_balance_correction(r, g, b, wb_r, wb_g, wb_b);
 
-    log::debug!("Raw RGB: ({},{},{}), WB corrected: ({},{},{}), Clear: {}, WB Clear est: {}",
+    log::info!("Raw RGB: ({},{},{}), WB corrected: ({},{},{}), Clear: {}, WB Clear est: {}",
                r, g, b, r_wb, g_wb, b_wb, clear, wb_clear);
 
     // Check if the values are already reasonable after white balance
@@ -657,14 +657,14 @@ fn apply_adaptive_brightness_correction(
         let g_final = (g_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
         let b_final = (b_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
 
-        log::debug!("Applied minimal boost for very dark reading: {:.2} -> RGB({},{},{})",
+        log::info!("Applied minimal boost for very dark reading: {:.2} -> RGB({},{},{})",
                    gentle_boost, r_final, g_final, b_final);
 
         return (r_final, g_final, b_final);
     }
 
     // For all other cases, just use the white balance corrected values
-    log::debug!("Using white balance corrected values directly: RGB({},{},{})",
+    log::info!("Using white balance corrected values directly: RGB({},{},{})",
                r_wb, g_wb, b_wb);
 
     (r_wb, g_wb, b_wb)
