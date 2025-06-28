@@ -613,7 +613,7 @@ impl WsHandler<'_> {
 
         log::info!("Current TD value for calibration: {:.2}", current_td);
 
-        // Take current median reading from the buffers
+        // Take current RAW median reading from the buffers
         let (current_r, current_g, current_b) = {
             let buffers = self.rgb_buffers.lock().unwrap();
             (
@@ -638,7 +638,7 @@ impl WsHandler<'_> {
             locked_rgb.read_clear().unwrap_or(current_r)
         };
 
-        // Apply ONLY the base color correction (white balance and spectral response) 
+        // Apply ONLY the base color correction (white balance and spectral response)
         // WITHOUT any user multipliers to get the "natural" corrected color
         let wb_clear_estimate = (self.rgb_baseline.0 + self.rgb_baseline.1 + self.rgb_baseline.2) as f32 * 1.2;
         let (current_corrected_r, current_corrected_g, current_corrected_b) = apply_advanced_color_correction(
@@ -649,23 +649,48 @@ impl WsHandler<'_> {
         log::info!("Current corrected color (no user multipliers): R={}, G={}, B={}", 
                   current_corrected_r, current_corrected_g, current_corrected_b);
 
-        // Calculate what RGB multipliers are needed to transform current corrected color to target color
-        // This is simple: multiplier = target / current
-        let red_multiplier = if current_corrected_r > 0 { 
-            target_r as f32 / current_corrected_r as f32 
-        } else { 
+        // Get the PRESERVED TD reference value - NEVER change this during calibration
+        let preserved_td_reference = {
+            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            multipliers.td_reference
+        };
+
+        // Calculate TD-based brightness compensation factor using the PRESERVED reference
+        // If current TD is lower than reference, the material is more opaque and needs brightness boost
+        // If current TD is higher than reference, the material is more transparent and needs brightness reduction
+        let td_brightness_compensation = if preserved_td_reference > 0.1 {
+            preserved_td_reference / current_td.max(0.1) // Avoid division by zero
+        } else {
+            1.0 // No compensation if no reference TD
+        };
+
+        log::info!("TD brightness compensation factor: {:.3} (preserved_ref_td={:.2}, current_td={:.2})",
+                  td_brightness_compensation, preserved_td_reference, current_td);
+
+        // Apply TD compensation to target color to get the expected corrected color for this material
+        let td_compensated_target_r = (target_r as f32 / td_brightness_compensation).max(1.0).min(255.0);
+        let td_compensated_target_g = (target_g as f32 / td_brightness_compensation).max(1.0).min(255.0);
+        let td_compensated_target_b = (target_b as f32 / td_brightness_compensation).max(1.0).min(255.0);
+
+        log::info!("TD compensated target color: R={:.1}, G={:.1}, B={:.1}",
+                  td_compensated_target_r, td_compensated_target_g, td_compensated_target_b);
+
+        // Calculate what RGB multipliers are needed to transform current corrected color to TD-compensated target
+        let red_multiplier = if current_corrected_r > 0 {
+            td_compensated_target_r / current_corrected_r as f32
+        } else {
             1.0 
         };
         
         let green_multiplier = if current_corrected_g > 0 { 
-            target_g as f32 / current_corrected_g as f32 
-        } else { 
+            td_compensated_target_g / current_corrected_g as f32
+        } else {
             1.0 
         };
         
         let blue_multiplier = if current_corrected_b > 0 { 
-            target_b as f32 / current_corrected_b as f32 
-        } else { 
+            td_compensated_target_b / current_corrected_b as f32
+        } else {
             1.0 
         };
 
@@ -683,22 +708,31 @@ impl WsHandler<'_> {
         log::info!("Calculated RGB multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3} (unchanged)", 
                   final_red, final_green, final_blue, current_brightness);
 
-        // Verify the calculation by simulating what the final color will be
-        let (verify_r, verify_g, verify_b) = (
-            (current_corrected_r as f32 * final_red * current_brightness).round().min(255.0).max(0.0) as u8,
-            (current_corrected_g as f32 * final_green * current_brightness).round().min(255.0).max(0.0) as u8,
-            (current_corrected_b as f32 * final_blue * current_brightness).round().min(255.0).max(0.0) as u8,
+        // Verify the calculation by simulating what the final color will be with TD compensation
+        let verify_with_td = apply_td_based_brightness_correction(
+            current_corrected_r, current_corrected_g, current_corrected_b,
+            current_td,
+            &RGBMultipliers {
+                red: final_red,
+                green: final_green,
+                blue: final_blue,
+                brightness: current_brightness,
+                td_reference: preserved_td_reference, // Use preserved value
+                reference_r: target_r,
+                reference_g: target_g,
+                reference_b: target_b,
+            }
         );
 
         log::info!("Verification - Target: RGB({},{},{}), Calculated result: RGB({},{},{})",
-                  target_r, target_g, target_b, verify_r, verify_g, verify_b);
+                  target_r, target_g, target_b, verify_with_td.0, verify_with_td.1, verify_with_td.2);
 
         let new_multipliers = RGBMultipliers {
             red: final_red,
             green: final_green,
             blue: final_blue,
             brightness: current_brightness, // Keep current brightness unchanged
-            td_reference: current_td,
+            td_reference: preserved_td_reference, // PRESERVE the original TD reference - NEVER change this
             reference_r: target_r,
             reference_g: target_g,
             reference_b: target_b,
@@ -715,7 +749,7 @@ impl WsHandler<'_> {
             Ok(_) => {
                 let response = format!(
                     r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    final_red, final_green, final_blue, current_brightness, current_td
+                    final_red, final_green, final_blue, current_brightness, preserved_td_reference
                 );
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -944,140 +978,6 @@ impl WsHandler<'_> {
     }
 }
 
-fn normalize_rgb_value(value: u16, baseline: u16) -> u8 {
-    if baseline == 0 {
-        return 0;
-    }
-    
-    // Scale to 0-255 range, with some amplification for visibility
-    let scaled = ((value as f32 / baseline as f32) * 180.0).round() as u16;
-    (scaled.min(255)) as u8
-}
-
-fn normalize_rgb_value_with_white_balance(value: u16, white_balance: u16) -> u8 {
-    if white_balance == 0 {
-        return 0;
-    }
-
-    // White balance correction: normalize against the white reference
-    // Scale to 0-255 range based on the proportion of the measured value to white balance
-    let normalized = (value as f32 / white_balance as f32) * 255.0;
-    (normalized.round().min(255.0).max(0.0)) as u8
-}
-
-fn apply_white_balance_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, wb_b: u16) -> (u8, u8, u8) {
-    // Calculate the minimum white balance value to use as baseline
-    let min_wb = wb_r.min(wb_g).min(wb_b) as f32;
-
-    // Calculate normalization factors - how much each channel needs to be scaled
-    // to balance against the weakest channel
-    let r_factor = min_wb / wb_r as f32;
-    let g_factor = min_wb / wb_g as f32;
-    let b_factor = min_wb / wb_b as f32;
-
-    // Apply the correction factors to the measured values
-    let r_corrected = (r as f32 * r_factor).round() as u16;
-    let g_corrected = (g as f32 * g_factor).round() as u16;
-    let b_corrected = (b as f32 * b_factor).round() as u16;
-
-    // Find the maximum corrected value to determine if scaling is needed
-    let max_corrected = r_corrected.max(g_corrected).max(b_corrected);
-
-    // Only scale to 0-255 range if any value exceeds 255
-    let (r_final, g_final, b_final) = if max_corrected > 255 {
-        let scale_factor = 255.0 / max_corrected as f32;
-        let r_scaled = ((r_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-        let g_scaled = ((g_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-        let b_scaled = ((b_corrected as f32 * scale_factor).round().min(255.0).max(0.0)) as u8;
-        (r_scaled, g_scaled, b_scaled)
-    } else {
-        // Keep original corrected values if all are within 0-255 range
-        (r_corrected as u8, g_corrected as u8, b_corrected as u8)
-    };
-
-    log::info!("WB correction: R({}->{}) G({}->{}) B({}->{}), factors: R={:.3} G={:.3} B={:.3}, max={}, scaled={}",
-               r, r_final, g, g_final, b, b_final, r_factor, g_factor, b_factor, max_corrected, max_corrected > 255);
-
-    (r_final, g_final, b_final)
-}
-
-fn apply_brightness_correction(
-    r: u16, g: u16, b: u16,
-    wb_r: u16, wb_g: u16, wb_b: u16,
-    clear: u16, wb_clear: u16
-) -> (u8, u8, u8) {
-    // First apply white balance correction
-    let (r_wb, g_wb, b_wb) = apply_white_balance_correction(r, g, b, wb_r, wb_g, wb_b);
-
-    // Calculate transmission ratio from clear channel
-    let transmission_ratio = if wb_clear > 0 {
-        (clear as f32 / wb_clear as f32).min(1.0).max(0.01) // Clamp between 1% and 100%
-    } else {
-        1.0
-    };
-
-    log::info!("Transmission ratio: {:.3} (clear: {}, wb_clear: {})",
-               transmission_ratio, clear, wb_clear);
-
-    // If transmission is very low, the plastic is very dark/thick
-    // We need to boost the color intensity to compensate
-    let brightness_boost = if transmission_ratio < 0.1 {
-        // For very dark plastic (< 10% transmission), apply strong boost
-        1.0 / transmission_ratio.max(0.05) // Cap boost at 20x
-    } else if transmission_ratio < 0.5 {
-        // For medium darkness (10-50% transmission), apply moderate boost
-        1.0 / transmission_ratio.powf(0.7) // Less aggressive boost
-    } else {
-        // For light plastic (> 50% transmission), minimal or no boost
-        1.0 / transmission_ratio.powf(0.3)
-    };
-
-    // Apply brightness correction while preserving color ratios
-    let r_corrected = (r_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
-    let g_corrected = (g_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
-    let b_corrected = (b_wb as f32 * brightness_boost).round().min(255.0).max(0.0) as u8;
-
-    log::info!("Brightness correction: boost={:.2}, RGB({},{},{}) -> ({},{},{})",
-               brightness_boost, r_wb, g_wb, b_wb, r_corrected, g_corrected, b_corrected);
-
-    (r_corrected, g_corrected, b_corrected)
-}
-
-fn apply_adaptive_brightness_correction(
-    r: u16, g: u16, b: u16, clear: u16,
-    wb_r: u16, wb_g: u16, wb_b: u16, wb_clear: u16
-) -> (u8, u8, u8) {
-    // Apply white balance correction only - no aggressive brightness correction
-    let (r_wb, g_wb, b_wb) = apply_white_balance_correction(r, g, b, wb_r, wb_g, wb_b);
-
-    log::info!("Raw RGB: ({},{},{}), WB corrected: ({},{},{}), Clear: {}, WB Clear est: {}",
-               r, g, b, r_wb, g_wb, b_wb, clear, wb_clear);
-
-    // Check if the values are already reasonable after white balance
-    let max_val = r_wb.max(g_wb).max(b_wb);
-
-    // Only apply very minimal correction if all values are extremely low
-    if max_val < 10 {
-        // Apply a very conservative boost only for extremely dark readings
-        let gentle_boost = 2.0; // Maximum 2x boost
-
-        let r_final = (r_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
-        let g_final = (g_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
-        let b_final = (b_wb as f32 * gentle_boost).round().min(255.0).max(0.0) as u8;
-
-        log::info!("Applied minimal boost for very dark reading: {:.2} -> RGB({},{},{})",
-                   gentle_boost, r_final, g_final, b_final);
-
-        return (r_final, g_final, b_final);
-    }
-
-    // For all other cases, just use the white balance corrected values
-    log::info!("Using white balance corrected values directly: RGB({},{},{})",
-               r_wb, g_wb, b_wb);
-
-    (r_wb, g_wb, b_wb)
-}
-
 fn apply_spectral_response_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, wb_b: u16) -> (u8, u8, u8) {
     // Calculate relative sensitivities from white balance calibration
     let total_wb = wb_r as f32 + wb_g as f32 + wb_b as f32;
@@ -1288,7 +1188,7 @@ async fn read_data_with_buffer(
         buffer.median().unwrap_or(current_reading)
     };
 
-    let (r_median, g_median, b_median) = {
+    let (r_median_raw, g_median_raw, b_median_raw) = {
         let buffers = rgb_buffers.lock().unwrap();
         (
             buffers.0.median().unwrap_or(rgb_white_balance.0),
@@ -1297,33 +1197,32 @@ async fn read_data_with_buffer(
         )
     };
 
-    // Keep TD calculation exactly as is
+    // Calculate TD from RAW lux reading - FIXED CALCULATION
     let td_value = (final_median_lux / baseline_reading) * 100.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
-    // Read clear channel for brightness correction
-    let clear_median = {
+    // Read clear channel for brightness correction (RAW)
+    let clear_median_raw = {
         let mut locked_rgb = veml_rgb.lock().unwrap();
         locked_rgb.read_clear().unwrap_or(rgb_white_balance.0)
     };
 
-    // Use a more accurate clear reference estimation based on calibration
-    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.2;
+    log::debug!("RAW median values: Lux={:.2}, RGB=({},{},{}), Clear={}",
+               final_median_lux, r_median_raw, g_median_raw, b_median_raw, clear_median_raw);
 
-    log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est: {}",
-               r_median, g_median, b_median, clear_median,
-               rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate);
-
-    // Apply the improved color correction
-    let (r_norm, g_norm, b_norm) = apply_advanced_color_correction(
-        r_median, g_median, b_median, clear_median,
-        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
+    // NOW apply calibration/correction to the RAW median values
+    // Step 1: Apply spectral response correction to RAW medians
+    let (r_corrected, g_corrected, b_corrected) = apply_spectral_response_correction(
+        r_median_raw, g_median_raw, b_median_raw,
+        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
     );
 
-    // Apply user RGB multipliers with TD-based brightness adjustment
+    log::info!("Spectral corrected RGB: ({},{},{})", r_corrected, g_corrected, b_corrected);
+
+    // Step 2: Apply user RGB multipliers with TD-based brightness adjustment to corrected values
     let (r_final, g_final, b_final) = {
         let multipliers = rgb_multipliers.lock().unwrap();
-        apply_rgb_multipliers(r_norm, g_norm, b_norm, adjusted_td_value, &*multipliers)
+        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, adjusted_td_value, &*multipliers)
     };
 
     // Create hex color string with corrected values
@@ -1347,9 +1246,9 @@ async fn read_data_with_buffer(
 
     log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}, Lux: {}, Clear: {}",
                adjusted_td_value, hex_color, lux_len, rgb_len, buffer_count,
-               r_median, g_median, b_median,
+               r_median_raw, g_median_raw, b_median_raw,
                r_final, g_final, b_final,
-               saved_algorithm.b, final_median_lux, clear_median);
+               saved_algorithm.b, final_median_lux, clear_median_raw);
 
     Some(ws_message)
 }
@@ -1416,11 +1315,11 @@ pub async fn read_averaged_data_with_buffer(
 
     embassy_time::Timer::after_millis(10).await;
 
-    // For averaged data, we'll take more intensive sampling
+    // For averaged data, we'll take more intensive sampling - store RAW values only
     let sample_count = 100;
-    let mut clear_readings = Vec::with_capacity(sample_count);
+    let mut clear_readings_raw = Vec::with_capacity(sample_count);
 
-    // Take many rapid samples to fill the median buffer
+    // Take many rapid samples to fill the median buffer with RAW values
     for _ in 0..sample_count {
         let clr = match locked_veml.read_lux() {
             Ok(d) => d,
@@ -1430,12 +1329,13 @@ pub async fn read_averaged_data_with_buffer(
             }
         };
 
+        // Store RAW lux value
         {
             let mut buffer = lux_buffer.lock().unwrap();
             buffer.push(clr as f32);
         }
 
-        // Read RGB values
+        // Store RAW RGB values
         let mut locked_rgb = veml_rgb.lock().unwrap();
         if let (Ok(r), Ok(g), Ok(b), Ok(clear)) = (
             locked_rgb.read_red(),
@@ -1444,10 +1344,10 @@ pub async fn read_averaged_data_with_buffer(
             locked_rgb.read_clear()
         ) {
             let mut buffers = rgb_buffers.lock().unwrap();
-            buffers.0.push(r);
-            buffers.1.push(g);
-            buffers.2.push(b);
-            clear_readings.push(clear);
+            buffers.0.push(r); // Store RAW red
+            buffers.1.push(g); // Store RAW green
+            buffers.2.push(b); // Store RAW blue
+            clear_readings_raw.push(clear); // Store RAW clear
         }
 
         embassy_time::Timer::after_millis(12).await;
@@ -1466,13 +1366,13 @@ pub async fn read_averaged_data_with_buffer(
         buffer.len()
     };
 
-    // Get median values from the filled buffers
-    let median = {
+    // Get RAW median values from the filled buffers
+    let median_lux_raw = {
         let buffer = lux_buffer.lock().unwrap();
         buffer.median().unwrap_or(current_reading)
     };
 
-    let (r_median, g_median, b_median) = {
+    let (r_median_raw, g_median_raw, b_median_raw) = {
         let buffers = rgb_buffers.lock().unwrap();
         (
             buffers.0.median().unwrap_or(rgb_white_balance.0),
@@ -1481,33 +1381,37 @@ pub async fn read_averaged_data_with_buffer(
         )
     };
 
-    // Calculate clear median
-    let clear_median = if !clear_readings.is_empty() {
-        clear_readings.sort();
-        clear_readings[clear_readings.len() / 2]
+    // Calculate RAW clear median
+    let clear_median_raw = if !clear_readings_raw.is_empty() {
+        clear_readings_raw.sort();
+        clear_readings_raw[clear_readings_raw.len() / 2]
     } else {
         rgb_white_balance.0 // Fallback
     };
 
-    // Keep TD calculation exactly as is
-    let td_value = (median / baseline_reading) * 10.0;
+    // Calculate TD from RAW lux reading - FIXED CALCULATION
+    let td_value = (median_lux_raw / baseline_reading) * 100.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
-    // Use a more accurate clear reference estimation based on calibration
-    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.2;
+    log::debug!("RAW median values: Lux={:.2}, RGB=({},{},{}), Clear={}",
+               median_lux_raw, r_median_raw, g_median_raw, b_median_raw, clear_median_raw);
 
-    // Apply the improved color correction
-    let (r_norm, g_norm, b_norm) = apply_advanced_color_correction(
-        r_median, g_median, b_median, clear_median,
-        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
+    // NOW apply calibration/correction to the RAW median values
+    // Step 1: Apply spectral response correction to RAW medians
+    let (r_corrected, g_corrected, b_corrected) = apply_spectral_response_correction(
+        r_median_raw, g_median_raw, b_median_raw,
+        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
     );
 
-    // Apply user RGB multipliers with TD-based brightness adjustment
+    log::info!("Spectral corrected RGB: ({},{},{})", r_corrected, g_corrected, b_corrected);
+
+    // Step 2: Apply user RGB multipliers with TD-based brightness adjustment to corrected values
     let (r_final, g_final, b_final) = {
         let multipliers = rgb_multipliers.lock().unwrap();
-        apply_rgb_multipliers(r_norm, g_norm, b_norm, adjusted_td_value, &*multipliers)
+        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, adjusted_td_value, &*multipliers)
     };
 
+    // Create hex color string with corrected values
     let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
 
     let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
@@ -1520,7 +1424,7 @@ pub async fn read_averaged_data_with_buffer(
     };
 
     log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{})",
-              td_value, hex_color, lux_len, rgb_len, buffer_count, r_median, g_median, b_median, r_final, g_final, b_final);
+              adjusted_td_value, hex_color, lux_len, rgb_len, buffer_count, r_median_raw, g_median_raw, b_median_raw, r_final, g_final, b_final);
 
     Some(ws_message)
 }
