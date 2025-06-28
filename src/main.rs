@@ -327,98 +327,103 @@ fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>
 ) -> (u16, u16, u16) {
-    let sample_count = 30;
-    let sample_delay = 100u32;
-    let mut r_readings: Vec<u16> = Vec::with_capacity(sample_count);
-    let mut g_readings: Vec<u16> = Vec::with_capacity(sample_count);
-    let mut b_readings: Vec<u16> = Vec::with_capacity(sample_count);
-    let mut clear_readings: Vec<u16> = Vec::with_capacity(sample_count);
+    let sample_count = 20; // Increased samples for better accuracy
+    let sample_delay = 80u32;
 
-    log::info!("Starting RGB white balance calibration at full LED brightness with {} samples", sample_count);
+    log::info!("Starting comprehensive RGB white balance calibration with {} samples", sample_count);
 
-    // Set LED to 75 brightness for white balance calibration
-    {
-        let mut led = led_light.lock().unwrap();
-        led.set_duty(75).unwrap();
-    }
+    // Take calibration readings at multiple brightness levels to account for non-linearity
+    let brightness_levels = [10, 25 ,50, 75]; // Different LED brightness levels
+    let mut all_r_readings: Vec<u16> = Vec::new();
+    let mut all_g_readings: Vec<u16> = Vec::new();
+    let mut all_b_readings: Vec<u16> = Vec::new();
+    let mut all_clear_readings: Vec<u16> = Vec::new();
 
-    // Wait for LED to stabilize
-    FreeRtos.delay_ms(200);
+    for &brightness in &brightness_levels {
+        log::info!("Taking calibration readings at {}% brightness", brightness);
 
-    // Do register dump only once for diagnostics
-//     {
-//         let mut locked_veml = veml_rgb.lock().unwrap();
-//         match locked_veml.read_all_registers() {
-//             Ok(_) => log::info!("Register dump completed successfully during white balance"),
-//             Err(e) => log::warn!("Register dump failed during white balance: {:?}", e),
-//         }
-//     }
-
-    for i in 0..sample_count {
-        let mut locked_veml = veml_rgb.lock().unwrap();
-        match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue(), locked_veml.read_clear()) {
-            (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
-                log::debug!("White balance sample {}: R={}, G={}, B={}, Clear={}", i, r, g, b, clear);
-                r_readings.push(r);
-                g_readings.push(g);
-                b_readings.push(b);
-                clear_readings.push(clear);
-            },
-            (r_result, g_result, b_result, clear_result) => {
-                log::warn!("Failed to read RGB sensor during white balance - R: {:?}, G: {:?}, B: {:?}, Clear: {:?}",
-                          r_result, g_result, b_result, clear_result);
-                continue;
-            }
+        {
+            let mut led = led_light.lock().unwrap();
+            led.set_duty(brightness).unwrap();
         }
-        drop(locked_veml); // Explicitly release the lock before delay
-        FreeRtos.delay_ms(sample_delay);
+
+        // Wait for LED to stabilize
+        FreeRtos.delay_ms(300);
+
+        let mut r_readings: Vec<u16> = Vec::new();
+        let mut g_readings: Vec<u16> = Vec::new();
+        let mut b_readings: Vec<u16> = Vec::new();
+        let mut clear_readings: Vec<u16> = Vec::new();
+
+        for i in 0..sample_count {
+            let mut locked_veml = veml_rgb.lock().unwrap();
+            match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue(), locked_veml.read_clear()) {
+                (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
+                    log::debug!("Brightness {}% sample {}: R={}, G={}, B={}, Clear={}", brightness, i, r, g, b, clear);
+                    r_readings.push(r);
+                    g_readings.push(g);
+                    b_readings.push(b);
+                    clear_readings.push(clear);
+                },
+                (r_result, g_result, b_result, clear_result) => {
+                    log::warn!("Failed to read RGB sensor - R: {:?}, G: {:?}, B: {:?}, Clear: {:?}",
+                              r_result, g_result, b_result, clear_result);
+                    continue;
+                }
+            }
+            drop(locked_veml);
+            FreeRtos.delay_ms(sample_delay);
+        }
+
+        // Add readings from this brightness level to overall collection
+        all_r_readings.extend(r_readings);
+        all_g_readings.extend(g_readings);
+        all_b_readings.extend(b_readings);
+        all_clear_readings.extend(clear_readings);
     }
 
-    if r_readings.is_empty() {
+    if all_r_readings.is_empty() {
         log::error!("No valid RGB readings obtained during white balance, using default values");
-        return (1000, 1000, 1000); // Default values for white balance
+        return (1000, 1000, 1000);
     }
 
-    // Calculate median values for white balance
-    r_readings.sort();
-    g_readings.sort();
-    b_readings.sort();
-    clear_readings.sort();
+    // Calculate median values across all brightness levels
+    all_r_readings.sort();
+    all_g_readings.sort();
+    all_b_readings.sort();
+    all_clear_readings.sort();
 
-    let r_median = r_readings[r_readings.len() / 2];
-    let g_median = g_readings[g_readings.len() / 2];
-    let b_median = b_readings[b_readings.len() / 2];
-    let clear_median = if !clear_readings.is_empty() {
-        clear_readings[clear_readings.len() / 2]
+    let r_median = all_r_readings[all_r_readings.len() / 2];
+    let g_median = all_g_readings[all_g_readings.len() / 2];
+    let b_median = all_b_readings[all_b_readings.len() / 2];
+    let clear_median = if !all_clear_readings.is_empty() {
+        all_clear_readings[all_clear_readings.len() / 2]
     } else {
-        r_median + g_median + b_median // Estimate if clear failed
+        r_median + g_median + b_median
     };
 
-    // Calculate relative intensities for logging
-    let min_intensity = r_median.min(g_median).min(b_median) as f32;
-    let r_ratio = r_median as f32 / min_intensity;
-    let g_ratio = g_median as f32 / min_intensity;
-    let b_ratio = b_median as f32 / min_intensity;
+    // Calculate spectral response ratios for proper white balance
+    // Assume green channel as reference (typically most sensitive in visible range)
+    let g_ref = g_median as f32;
+    let r_ratio = r_median as f32 / g_ref;
+    let b_ratio = b_median as f32 / g_ref;
 
-    // Calculate clear channel ratio for better reference estimation
-    let rgb_sum = r_median + g_median + b_median;
-    let clear_ratio = if rgb_sum > 0 {
-        clear_median as f32 / rgb_sum as f32
-    } else {
-        0.0
-    };
+    // Apply color temperature correction for LED vs daylight
+    // LEDs are typically cooler (more blue) than ideal D65 daylight
+    let led_color_temp_correction_r = 1.05; // Slightly boost red
+    let led_color_temp_correction_b = 0.95; // Slightly reduce blue
 
-    log::info!("RGB white balance readings - R: {:?}", r_readings);
-    log::info!("RGB white balance readings - G: {:?}", g_readings);
-    log::info!("RGB white balance readings - B: {:?}", b_readings);
-    log::info!("Clear white balance readings: {:?}", clear_readings);
-    log::info!("RGB white balance final (full LED): R={}, G={}, B={}, Clear={}",
+    let corrected_r = (r_median as f32 * led_color_temp_correction_r) as u16;
+    let corrected_b = (b_median as f32 * led_color_temp_correction_b) as u16;
+
+    log::info!("RGB white balance raw medians: R={}, G={}, B={}, Clear={}",
               r_median, g_median, b_median, clear_median);
-    log::info!("Channel intensity ratios (relative to weakest): R={:.2}x, G={:.2}x, B={:.2}x",
-              r_ratio, g_ratio, b_ratio);
-    log::info!("Clear/RGB ratio: {:.3} (will use 0.9 as estimate for corrections)", clear_ratio);
+    log::info!("Spectral response ratios (relative to Green): R={:.3}, B={:.3}", r_ratio, b_ratio);
+    log::info!("Color temperature corrected: R={}, G={}, B={}",
+              corrected_r, g_median, corrected_b);
 
-    (r_median, g_median, b_median)
+    // Return color temperature corrected values
+    (corrected_r, g_median, corrected_b)
 }
 
 pub async fn serial_connection<'a>(
@@ -442,11 +447,11 @@ pub async fn serial_connection<'a>(
     let send = channel.sender();
 
     // Create median buffers for serial connection
-    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50)));
+    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(500)));
     let rgb_buffers = Arc::new(Mutex::new((
-        median_buffer::RunningMedianBufferU16::new(50),
-        median_buffer::RunningMedianBufferU16::new(50),
-        median_buffer::RunningMedianBufferU16::new(50),
+        median_buffer::RunningMedianBufferU16::new(500),
+        median_buffer::RunningMedianBufferU16::new(500),
+        median_buffer::RunningMedianBufferU16::new(500),
     )));
 
     let conn_loop = async {
@@ -514,7 +519,7 @@ pub async fn serial_connection<'a>(
                 embassy_time::Timer::after_millis(300).await;
                 continue;
             }
-            embassy_time::Timer::after_millis(300).await;
+            embassy_time::Timer::after_millis(50).await;
 
             let reading = routes::read_averaged_data_with_buffer(
                 veml.clone(),
@@ -606,11 +611,11 @@ pub async fn run<'a>(
         ws2812b,
         saved_algorithm,
         // Initialize median buffers
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))),
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(500))),
         rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(50),
-            median_buffer::RunningMedianBufferU16::new(50),
-            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(500),
+            median_buffer::RunningMedianBufferU16::new(500),
+            median_buffer::RunningMedianBufferU16::new(500),
         ))),
     };
     match server.run(None, acceptor, handler).await {

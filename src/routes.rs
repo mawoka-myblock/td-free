@@ -670,62 +670,80 @@ fn apply_adaptive_brightness_correction(
     (r_wb, g_wb, b_wb)
 }
 
-// Keep old function for compatibility but redirect to new buffered version
-async fn read_data(
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),
-    dark_rgb_baseline: (u16, u16, u16),
-    wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'_>>>,
-    ws2812: Arc<Mutex<LedType<'_>>>,
-    saved_algorithm: NvsData,
-) -> Option<String> {
-    // Create temporary buffers for compatibility - keep same size as main buffers
-    let lux_buffer = Arc::new(Mutex::new(RunningMedianBuffer::new(500)));
-    let rgb_buffers = Arc::new(Mutex::new((
-        RunningMedianBufferU16::new(500),
-        RunningMedianBufferU16::new(500),
-        RunningMedianBufferU16::new(500),
-    )));
+fn apply_spectral_response_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u16, wb_b: u16) -> (u8, u8, u8) {
+    // Calculate relative sensitivities from white balance calibration
+    let total_wb = wb_r as f32 + wb_g as f32 + wb_b as f32;
+    if total_wb == 0.0 {
+        return (128, 128, 128); // Gray fallback
+    }
 
-    read_data_with_buffer(
-        veml, veml_rgb, dark_baseline_reading, baseline_reading,
-        rgb_white_balance, dark_rgb_baseline, wifi_status, led_light,
-        ws2812, saved_algorithm, lux_buffer, rgb_buffers
-    ).await
+    // Normalize white balance values to get relative channel sensitivities
+    let wb_r_norm = wb_r as f32 / total_wb;
+    let wb_g_norm = wb_g as f32 / total_wb;
+    let wb_b_norm = wb_b as f32 / total_wb;
+
+    // Calculate correction factors - use green as reference (typically most stable)
+    let target_balance = 1.0 / 3.0; // Equal RGB in white light
+    let r_correction = target_balance / wb_r_norm;
+    let g_correction = target_balance / wb_g_norm;
+    let b_correction = target_balance / wb_b_norm;
+
+    // Apply spectral response correction
+    let r_corrected = (r as f32 * r_correction).round();
+    let g_corrected = (g as f32 * g_correction).round();
+    let b_corrected = (b as f32 * b_correction).round();
+
+    // Find maximum to normalize to 0-255 range
+    let max_corrected = r_corrected.max(g_corrected).max(b_corrected);
+
+    let (r_final, g_final, b_final) = if max_corrected > 255.0 {
+        let scale = 255.0 / max_corrected;
+        (
+            (r_corrected * scale).round().min(255.0).max(0.0) as u8,
+            (g_corrected * scale).round().min(255.0).max(0.0) as u8,
+            (b_corrected * scale).round().min(255.0).max(0.0) as u8,
+        )
+    } else {
+        (
+            r_corrected.min(255.0).max(0.0) as u8,
+            g_corrected.min(255.0).max(0.0) as u8,
+            b_corrected.min(255.0).max(0.0) as u8,
+        )
+    };
+
+    log::info!("Spectral correction: Raw({},{},{}) -> WB factors({:.3},{:.3},{:.3}) -> Final({},{},{})",
+               r, g, b, r_correction, g_correction, b_correction, r_final, g_final, b_final);
+
+    (r_final, g_final, b_final)
 }
 
-// Keep old function for compatibility
-const AVERAGE_SAMPLE_RATE: i32 = 30;
-const AVERAGE_SAMPLE_DELAY: u64 = 50;
-pub async fn read_averaged_data(
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),
-    dark_rgb_baseline: (u16, u16, u16),
-    wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'_>>>,
-    ws2812: Arc<Mutex<LedType<'_>>>,
-    saved_algorithm: NvsData,
-) -> Option<String> {
-    // Create temporary buffers for compatibility - keep same size as main buffers
-    let lux_buffer = Arc::new(Mutex::new(RunningMedianBuffer::new(500)));
-    let rgb_buffers = Arc::new(Mutex::new((
-        RunningMedianBufferU16::new(500),
-        RunningMedianBufferU16::new(500),
-        RunningMedianBufferU16::new(500),
-    )));
+fn apply_advanced_color_correction(
+    r: u16, g: u16, b: u16, clear: u16,
+    wb_r: u16, wb_g: u16, wb_b: u16, wb_clear: u16
+) -> (u8, u8, u8) {
+    // Step 1: Apply spectral response correction
+    let (r_spec, g_spec, b_spec) = apply_spectral_response_correction(r, g, b, wb_r, wb_g, wb_b);
 
-    read_averaged_data_with_buffer(
-        veml, veml_rgb, dark_baseline_reading, baseline_reading,
-        rgb_white_balance, dark_rgb_baseline, wifi_status, led_light,
-        ws2812, saved_algorithm, lux_buffer, rgb_buffers
-    ).await
+    // Step 2: Apply brightness correction only if needed
+    let avg_intensity = (r_spec as f32 + g_spec as f32 + b_spec as f32) / 3.0;
+
+    // Only apply brightness boost for very dark samples
+    if avg_intensity < 20.0 && clear > 0 && wb_clear > 0 {
+        let transmission_ratio = (clear as f32 / wb_clear as f32).min(1.0).max(0.05);
+        let brightness_boost = (1.0 / transmission_ratio.powf(0.5)).min(3.0); // Cap at 3x boost
+
+        let r_boosted = (r_spec as f32 * brightness_boost).round().min(255.0) as u8;
+        let g_boosted = (g_spec as f32 * brightness_boost).round().min(255.0) as u8;
+        let b_boosted = (b_spec as f32 * brightness_boost).round().min(255.0) as u8;
+
+        log::info!("Applied brightness boost {:.2}x for dark sample: ({},{},{}) -> ({},{},{})",
+                   brightness_boost, r_spec, g_spec, b_spec, r_boosted, g_boosted, b_boosted);
+
+        return (r_boosted, g_boosted, b_boosted);
+    }
+
+    log::info!("Using spectral corrected values: ({},{},{})", r_spec, g_spec, b_spec);
+    (r_spec, g_spec, b_spec)
 }
 
 async fn read_data_with_buffer(
@@ -742,6 +760,8 @@ async fn read_data_with_buffer(
     lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
     rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
 ) -> Option<String> {
+
+
     // Take a quick reading first for fast filament detection
     let current_reading = {
         let mut locked_veml = veml.lock().unwrap();
@@ -791,7 +811,7 @@ async fn read_data_with_buffer(
     // Take multiple readings for median calculation - keep consistent count regardless of buffer size
     let readings_per_call = 3;
     for _ in 0..readings_per_call {
-        embassy_time::Timer::after_millis(5).await;
+        embassy_time::Timer::after_millis(15).await;
         let mut locked_veml = veml.lock().unwrap();
         if let Ok(clr) = locked_veml.read_lux() {
             let mut buffer = lux_buffer.lock().unwrap();
@@ -834,15 +854,15 @@ async fn read_data_with_buffer(
         locked_rgb.read_clear().unwrap_or(rgb_white_balance.0)
     };
 
-    // Use a more conservative clear reference estimation
-    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.376;
+    // Use a more accurate clear reference estimation based on calibration
+    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.2;
 
     log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est={:.0}",
                r_median, g_median, b_median, clear_median,
                rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate);
 
-    // Apply the corrected brightness function
-    let (r_norm, g_norm, b_norm) = apply_adaptive_brightness_correction(
+    // Apply the improved color correction
+    let (r_norm, g_norm, b_norm) = apply_advanced_color_correction(
         r_median, g_median, b_median, clear_median,
         rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
     );
@@ -866,8 +886,11 @@ async fn read_data_with_buffer(
         (lux_buf.len(), rgb_buf.0.len())
     };
 
-    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}",
-              td_value, hex_color, lux_len, rgb_len, r_median, g_median, b_median, r_norm, g_norm, b_norm, baseline_reading);
+    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}, Lux: {}, Clear: {}",
+               adjusted_td_value, hex_color, lux_len, rgb_len,
+               r_median, g_median, b_median,
+               r_norm, g_norm, b_norm,
+               saved_algorithm.b, final_median_lux, clear_median);
 
     Some(ws_message)
 }
@@ -1004,11 +1027,11 @@ pub async fn read_averaged_data_with_buffer(
     let td_value = (median / baseline_reading) * 10.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
-    // Use a more conservative clear reference estimation
-    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 0.9;
+    // Use a more accurate clear reference estimation based on calibration
+    let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.2;
 
-    // Apply the corrected brightness function
-    let (r_norm, g_norm, b_norm) = apply_adaptive_brightness_correction(
+    // Apply the improved color correction
+    let (r_norm, g_norm, b_norm) = apply_advanced_color_correction(
         r_median, g_median, b_median, clear_median,
         rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
     );
