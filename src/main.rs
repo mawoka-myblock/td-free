@@ -55,7 +55,7 @@ mod median_buffer;
 mod routes;
 mod veml3328;
 mod wifi;
-
+mod calibration_optimizer;
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -186,14 +186,14 @@ fn main() -> Result<(), ()> {
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
-    FreeRtos.delay_ms(500);
+    FreeRtos.delay_ms(200);
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
 
     // White balance calibration at 50% LED brightness
     let rgb_white_balance: (u16, u16, u16) = take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
 
     led_light.lock().unwrap().set_duty(25).unwrap();
-    FreeRtos.delay_ms(400);
+    FreeRtos.delay_ms(200);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
 
     // For compatibility, we'll use the white balance as both baseline values
@@ -648,7 +648,7 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
 
 fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32 {
     let sample_count = 20;
-    let sample_delay = 50u32;
+    let sample_delay = 100u32; // Increased delay to ensure fresh readings
     let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);
 
     for _ in 0..sample_count {
@@ -667,6 +667,7 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32
         let reading = clr as f32;
         log::info!("Reading: {}", reading);
         readings.push(reading);
+        drop(locked_veml); // Release lock before delay
         FreeRtos.delay_ms(sample_delay);
     }
 
@@ -697,5 +698,6 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32
         filtered[filtered.len() / 2]
     };
 
+    log::info!("Baseline calculation: mean={:.2}, std={:.2}, median={:.2}", mean, std, median);
     median
 }
