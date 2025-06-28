@@ -278,7 +278,7 @@ fn take_rgb_white_balance_calibration(
     led_light: Arc<Mutex<LedcDriver<'_>>>
 ) -> (u16, u16, u16) {
     let sample_count = 20; // Increased samples for better accuracy
-    let sample_delay = 80u32;
+    let sample_delay = 50u32;
 
     log::info!("Starting comprehensive RGB white balance calibration with {} samples", sample_count);
 
@@ -399,11 +399,11 @@ pub async fn serial_connection<'a>(
     let send = channel.sender();
 
     // Create median buffers for serial connection
-    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(500)));
+    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100)));
     let rgb_buffers = Arc::new(Mutex::new((
-        median_buffer::RunningMedianBufferU16::new(500),
-        median_buffer::RunningMedianBufferU16::new(500),
-        median_buffer::RunningMedianBufferU16::new(500),
+        median_buffer::RunningMedianBufferU16::new(100),
+        median_buffer::RunningMedianBufferU16::new(100),
+        median_buffer::RunningMedianBufferU16::new(100),
     )));
 
     // Create default RGB multipliers for serial connection
@@ -572,11 +572,11 @@ pub async fn run<'a>(
         saved_algorithm,
         saved_rgb_multipliers: Arc::new(Mutex::new(saved_rgb_multipliers)),
         // Use smaller buffers to reduce memory usage
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))), // Reduced from 500
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
         rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(50), // Reduced from 500
-            median_buffer::RunningMedianBufferU16::new(50),
-            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(100),
+            median_buffer::RunningMedianBufferU16::new(100),
+            median_buffer::RunningMedianBufferU16::new(100),
         ))),
     };
 
@@ -647,7 +647,7 @@ fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_va
 }
 
 fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32 {
-    let sample_count = 30;
+    let sample_count = 20;
     let sample_delay = 50u32;
     let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);
 

@@ -20,6 +20,9 @@ pub struct RGBMultipliers {
     pub blue: f32,
     pub brightness: f32,
     pub td_reference: f32,  // TD value at calibration time
+    pub reference_r: u8,    // Reference red value (0-255)
+    pub reference_g: u8,    // Reference green value (0-255)
+    pub reference_b: u8,    // Reference blue value (0-255)
 }
 
 impl Default for RGBMultipliers {
@@ -30,6 +33,9 @@ impl Default for RGBMultipliers {
             blue: 1.0,
             brightness: 1.0,
             td_reference: 50.0,  // Default to 50% transmission
+            reference_r: 127,    // Default to 50% grey
+            reference_g: 127,    // Default to 50% grey
+            reference_b: 127,    // Default to 50% grey
         }
     }
 }
@@ -568,12 +574,39 @@ pub fn get_saved_rgb_multipliers(nvs: EspNvsPartition<NvsDefault>) -> RGBMultipl
         .and_then(|s| s.parse::<f32>().ok())
         .unwrap_or(50.0);
 
+    let mut ref_r_buffer = [0u8; 32];
+    let reference_r: u8 = nvs
+        .get_str("ref_r", &mut ref_r_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(127);
+
+    let mut ref_g_buffer = [0u8; 32];
+    let reference_g: u8 = nvs
+        .get_str("ref_g", &mut ref_g_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(127);
+
+    let mut ref_b_buffer = [0u8; 32];
+    let reference_b: u8 = nvs
+        .get_str("ref_b", &mut ref_b_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<u8>().ok())
+        .unwrap_or(127);
+
     RGBMultipliers {
         red: red_value,
         green: green_value,
         blue: blue_value,
         brightness: brightness_value,
         td_reference,
+        reference_r,
+        reference_g,
+        reference_b,
     }
 }
 
@@ -593,9 +626,13 @@ pub fn save_rgb_multipliers(
     nvs.set_str("blue", &multipliers.blue.to_string())?;
     nvs.set_str("brightness", &multipliers.brightness.to_string())?;
     nvs.set_str("td_reference", &multipliers.td_reference.to_string())?;
+    nvs.set_str("ref_r", &multipliers.reference_r.to_string())?;
+    nvs.set_str("ref_g", &multipliers.reference_g.to_string())?;
+    nvs.set_str("ref_b", &multipliers.reference_b.to_string())?;
 
-    log::info!("Saved RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}", 
-              multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference);
+    log::info!("Saved RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}, Ref_RGB=({},{},{})", 
+              multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference,
+              multipliers.reference_r, multipliers.reference_g, multipliers.reference_b);
     Ok(())
 }
 
@@ -609,6 +646,9 @@ pub fn clear_rgb_multipliers_nvs(nvs: EspNvsPartition<NvsDefault>) -> anyhow::Re
             let _ = nvs_handle.remove("blue");
             let _ = nvs_handle.remove("brightness");
             let _ = nvs_handle.remove("td_reference");
+            let _ = nvs_handle.remove("ref_r");
+            let _ = nvs_handle.remove("ref_g");
+            let _ = nvs_handle.remove("ref_b");
             info!("RGB multipliers NVS data cleared");
             Ok(())
         },

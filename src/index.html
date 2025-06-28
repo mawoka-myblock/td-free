@@ -1,6 +1,5 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -26,9 +25,6 @@
             width: 90%;
             max-width: 700px;
             min-height: 300px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
         }
 
         h1 {
@@ -51,14 +47,8 @@
             color: #388e3c;
         }
 
-        .wifi-link {
-            margin-top: auto;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
         #content {
-            margin: auto;
+            text-align: center;
             font-size: 3rem;
         }
 
@@ -76,10 +66,6 @@
         .action-btn:disabled {
             pointer-events: none;
             opacity: 0.3;
-        }
-
-        #content {
-            text-align: center;
         }
 
         .hidden {
@@ -100,86 +86,16 @@
             border: 2px solid #ccc;
             border-radius: 8px;
             cursor: pointer;
-            transition: transform 0.2s;
-        }
-        
-        .color-square:hover {
-            transform: scale(1.1);
-        }
-        
-        .color-info {
-            display: flex;
-            flex-direction: column;
-            align-items: flex-start;
         }
         
         .color-hex {
-            font-family: 'Courier New', monospace;
+            font-family: monospace;
             font-size: 14px;
             padding: 5px 10px;
             background-color: #f5f5f5;
             border: 1px solid #ddd;
             border-radius: 4px;
             cursor: pointer;
-            user-select: all;
-            transition: background-color 0.2s;
-        }
-        
-        .color-hex:hover {
-            background-color: #e0e0e0;
-        }
-        
-        .color-hex.copied {
-            background-color: #d4edda;
-            border-color: #c3e6cb;
-        }
-        
-        .color-label {
-            font-size: 12px;
-            color: #666;
-            margin-bottom: 3px;
-        }
-
-        .confidence-container {
-            margin: 15px auto;
-            width: 100%;
-            max-width: 300px;
-        }
-
-        .confidence-label {
-            font-size: 12px;
-            color: #666;
-            margin-bottom: 5px;
-            text-align: center;
-        }
-
-        .confidence-bar {
-            width: 100%;
-            height: 20px;
-            background-color: #f0f0f0;
-            border: 1px solid #ccc;
-            border-radius: 10px;
-            overflow: hidden;
-            position: relative;
-        }
-
-        .confidence-fill {
-            height: 100%;
-            width: 0%;
-            background: linear-gradient(to right, #ff4444, #ffaa00, #44ff44);
-            transition: width 0.3s ease, background-color 0.3s ease;
-            border-radius: 10px;
-        }
-
-        .confidence-text {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            font-size: 10px;
-            font-weight: bold;
-            color: #333;
-            text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
         }
 
         .rgb-correction {
@@ -189,21 +105,6 @@
             border-radius: 8px;
             background-color: #f9f9f9;
             max-width: 400px;
-        }
-
-        .rgb-correction h3 {
-            margin: 0 0 10px 0;
-            text-align: center;
-            color: #333;
-            font-size: 16px;
-        }
-
-        .rgb-correction .description {
-            margin: 0 0 15px 0;
-            text-align: center;
-            color: #666;
-            font-size: 12px;
-            font-style: italic;
         }
 
         .rgb-control {
@@ -225,7 +126,7 @@
         }
 
         .rgb-control .value-display {
-            font-family: 'Courier New', monospace;
+            font-family: monospace;
             font-size: 12px;
             min-width: 50px;
             text-align: center;
@@ -235,18 +136,20 @@
             border-radius: 3px;
         }
 
-        .rgb-control.red { border-left: 3px solid #ff4444; }
-        .rgb-control.green { border-left: 3px solid #44ff44; }
-        .rgb-control.blue { border-left: 3px solid #4444ff; }
-        .rgb-control.brightness { border-left: 3px solid #888888; }
-
-        .calibration-section {
-            margin-top: 15px;
-            padding-top: 15px;
-            border-top: 1px solid #ddd;
+        .ref-color {
+            margin: 15px 0;
+            text-align: center;
         }
 
-        .auto-calibrate-btn {
+        .ref-color input[type="color"] {
+            width: 50px;
+            height: 30px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .calibrate-btn {
             background-color: #ff9800;
             color: white;
             border: none;
@@ -255,16 +158,7 @@
             cursor: pointer;
             font-size: 12px;
             width: 100%;
-            margin-bottom: 10px;
-        }
-
-        .auto-calibrate-btn:hover {
-            background-color: #f57c00;
-        }
-
-        .auto-calibrate-btn:disabled {
-            background-color: #ccc;
-            cursor: not-allowed;
+            margin: 10px 0;
         }
 
         .reset-btn {
@@ -278,23 +172,28 @@
             width: 100%;
         }
 
-        .reset-btn:hover {
-            background-color: #555;
-        }
-
-        .calibration-instructions {
-            font-size: 11px;
-            color: #666;
+        .confidence-indicator {
+            margin: 10px auto;
             text-align: center;
-            margin-bottom: 10px;
-            line-height: 1.3;
-        }
-
-        .td-reference-info {
-            text-align: center;
-            margin-bottom: 10px;
             font-size: 12px;
-            color: #333;
+            color: #666;
+        }
+
+        .confidence-bar {
+            width: 200px;
+            height: 6px;
+            background-color: #ddd;
+            border-radius: 3px;
+            margin: 5px auto;
+            overflow: hidden;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: linear-gradient(to right, #ff4444, #ffaa00, #44ff44);
+            border-radius: 3px;
+            transition: width 0.3s ease;
+            width: 0%;
         }
     </style>
 </head>
@@ -305,67 +204,58 @@
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
 
-        <div id="confidence-container" class="confidence-container hidden">
-            <div class="confidence-label">Measurement Confidence</div>
-            <div class="confidence-bar">
-                <div id="confidence-fill" class="confidence-fill"></div>
-                <div id="confidence-text" class="confidence-text">0/50</div>
-            </div>
+        <div id="color-display" class="color-display hidden">
+            <div id="color-square" class="color-square" onclick="copyHex()"></div>
+            <div id="color-hex" class="color-hex" onclick="copyHex()"></div>
         </div>
 
-        <div id="color-display" class="color-display hidden">
-            <div id="color-square" class="color-square" onclick="copyHexColor()"></div>
-            <div class="color-info">
-                <div class="color-label">Color (click to copy):</div>
-                <div id="color-hex" class="color-hex" onclick="copyHexColor()"></div>
+        <div id="confidence-indicator" class="confidence-indicator hidden">
+            <div>Confidence: <span id="confidence-text">0%</span></div>
+            <div class="confidence-bar">
+                <div id="confidence-fill" class="confidence-fill"></div>
             </div>
         </div>
 
         <div id="rgb-correction" class="rgb-correction">
-            <h3>Manual Color & Brightness Correction</h3>
-            <div class="description">
-                Adjusts color balance and brightness independently<br>
-                <small>Brightness auto-adjusts based on TD (transmission) values</small>
+            <h3>Color Correction</h3>
+
+            <div class="ref-color">
+                <label>Target Color: </label>
+                <input type="color" id="ref-color" value="#7F7F7F" onchange="updateRefColor()">
+                <span id="ref-hex">#7F7F7F</span>
             </div>
-            <div class="rgb-control red">
+
+            <div class="rgb-control">
                 <label>R:</label>
-                <input type="range" id="red-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('red', this.value)">
-                <div id="red-value" class="value-display">1.00</div>
+                <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('red', this.value)">
+                <div id="red-val" class="value-display">1.00</div>
             </div>
-            <div class="rgb-control green">
+            <div class="rgb-control">
                 <label>G:</label>
-                <input type="range" id="green-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('green', this.value)">
-                <div id="green-value" class="value-display">1.00</div>
+                <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('green', this.value)">
+                <div id="green-val" class="value-display">1.00</div>
             </div>
-            <div class="rgb-control blue">
+            <div class="rgb-control">
                 <label>B:</label>
-                <input type="range" id="blue-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('blue', this.value)">
-                <div id="blue-value" class="value-display">1.00</div>
+                <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('blue', this.value)">
+                <div id="blue-val" class="value-display">1.00</div>
             </div>
-            <div class="rgb-control brightness">
+            <div class="rgb-control">
                 <label>☀:</label>
-                <input type="range" id="brightness-multiplier" min="0.1" max="3.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('brightness', this.value)">
-                <div id="brightness-value" class="value-display">1.00</div>
+                <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00" oninput="updateMult('brightness', this.value)">
+                <div id="bright-val" class="value-display">1.00</div>
             </div>
-            
-            <div class="calibration-section">
-                <div class="td-reference-info">
-                    <small>TD Reference: <span id="td-reference-value">50.00</span>% (calibration baseline)</small>
-                </div>
-                <div class="calibration-instructions">
-                    Place gray plastic sample over sensor, then click to auto-calibrate to 50% gray
-                </div>
-                <button class="auto-calibrate-btn" id="auto-calibrate-btn" onclick="autoCalibrateGray()">Auto-Calibrate to Gray</button>
-                <button class="reset-btn" onclick="resetRGBMultipliers()">Reset to Default</button>
-            </div>
+
+            <button class="calibrate-btn" id="cal-btn" onclick="autoCal()">Auto-Calibrate</button>
+            <button class="reset-btn" onclick="resetMult()">Reset</button>
         </div>
 
         <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to Spoolman</button>
-        <!--<button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged data</button>-->
-        <div style="display: flex; flex-direction: column; margin-top: auto;">
-            <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
-            <a href="/settings" class="wifi-link" onclick="settings_cfg">Settings</a>
-            <p class="wifi-link" style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
+
+        <div style="margin-top: auto;">
+            <a href="/wifi">Wifi Config</a><br>
+            <a href="/settings">Settings</a><br>
+            <p style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
         </div>
     </div>
 
@@ -377,232 +267,173 @@
         let showing_averaged = false;
         let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
         let currentHexColor = null;
-        let rgbMultipliers = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0 };
+        let rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
 
-        // Load RGB multipliers from ESP32 on page load
-        function loadRGBMultipliers() {
+        function loadMult() {
             fetch('/rgb_multipliers')
                 .then(response => response.json())
                 .then(data => {
-                    if (data.red !== undefined) rgbMultipliers.red = data.red;
-                    if (data.green !== undefined) rgbMultipliers.green = data.green;
-                    if (data.blue !== undefined) rgbMultipliers.blue = data.blue;
-                    if (data.brightness !== undefined) rgbMultipliers.brightness = data.brightness;
-                    if (data.td_reference !== undefined) rgbMultipliers.td_reference = data.td_reference;
-
-                    updateRGBSliders();
-                    updateTDReferenceDisplay();
+                    if (data.red !== undefined) rgbMult.red = data.red;
+                    if (data.green !== undefined) rgbMult.green = data.green;
+                    if (data.blue !== undefined) rgbMult.blue = data.blue;
+                    if (data.brightness !== undefined) rgbMult.brightness = data.brightness;
+                    if (data.td_reference !== undefined) rgbMult.td_reference = data.td_reference;
+                    if (data.reference_r !== undefined) rgbMult.reference_r = data.reference_r;
+                    if (data.reference_g !== undefined) rgbMult.reference_g = data.reference_g;
+                    if (data.reference_b !== undefined) rgbMult.reference_b = data.reference_b;
+                    updateSliders();
+                    updateRefDisplay();
                 })
-                .catch(err => console.warn('Could not load RGB multipliers:', err));
+                .catch(err => console.warn('Load failed:', err));
         }
 
-        function updateTDReferenceDisplay() {
-            const tdRefEl = document.getElementById('td-reference-value');
-            if (tdRefEl && rgbMultipliers.td_reference !== undefined) {
-                tdRefEl.textContent = rgbMultipliers.td_reference.toFixed(2);
-            }
+        function updateSliders() {
+            document.getElementById('red-mult').value = rgbMult.red.toFixed(2);
+            document.getElementById('green-mult').value = rgbMult.green.toFixed(2);
+            document.getElementById('blue-mult').value = rgbMult.blue.toFixed(2);
+            document.getElementById('bright-mult').value = rgbMult.brightness.toFixed(2);
+            document.getElementById('red-val').textContent = rgbMult.red.toFixed(2);
+            document.getElementById('green-val').textContent = rgbMult.green.toFixed(2);
+            document.getElementById('blue-val').textContent = rgbMult.blue.toFixed(2);
+            document.getElementById('bright-val').textContent = rgbMult.brightness.toFixed(2);
         }
 
-        function updateRGBSliders() {
-            document.getElementById('red-multiplier').value = rgbMultipliers.red.toFixed(2);
-            document.getElementById('green-multiplier').value = rgbMultipliers.green.toFixed(2);
-            document.getElementById('blue-multiplier').value = rgbMultipliers.blue.toFixed(2);
-            document.getElementById('brightness-multiplier').value = rgbMultipliers.brightness.toFixed(2);
-            document.getElementById('red-value').textContent = rgbMultipliers.red.toFixed(2);
-            document.getElementById('green-value').textContent = rgbMultipliers.green.toFixed(2);
-            document.getElementById('blue-value').textContent = rgbMultipliers.blue.toFixed(2);
-            document.getElementById('brightness-value').textContent = rgbMultipliers.brightness.toFixed(2);
+        function updateRefDisplay() {
+            const r = rgbMult.reference_r;
+            const g = rgbMult.reference_g;
+            const b = rgbMult.reference_b;
+            const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+            document.getElementById('ref-color').value = hex;
+            document.getElementById('ref-hex').textContent = hex.toUpperCase();
         }
 
-        function updateRGBMultiplier(channel, value) {
+        function updateRefColor() {
+            const hex = document.getElementById('ref-color').value;
+            const r = parseInt(hex.substr(1, 2), 16);
+            const g = parseInt(hex.substr(3, 2), 16);
+            const b = parseInt(hex.substr(5, 2), 16);
+            rgbMult.reference_r = r;
+            rgbMult.reference_g = g;
+            rgbMult.reference_b = b;
+            document.getElementById('ref-hex').textContent = hex.toUpperCase();
+            saveMult();
+        }
+
+        function updateMult(channel, value) {
             const numValue = parseFloat(value);
-            rgbMultipliers[channel] = numValue;
-            document.getElementById(`${channel}-value`).textContent = numValue.toFixed(2);
+            rgbMult[channel] = numValue;
+            document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
+            saveMult();
+            updateColorDisplay();
+        }
 
-            // Save to ESP32 immediately
+        function saveMult() {
             fetch('/rgb_multipliers', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(rgbMultipliers)
-            }).catch(err => console.warn('Failed to save RGB multipliers:', err));
-
-            // Update color display if we have a current color
-            updateColorWithMultipliers();
+                body: JSON.stringify(rgbMult)
+            }).catch(err => console.warn('Save failed:', err));
         }
 
-        function autoCalibrateGray() {
-            const button = document.getElementById('auto-calibrate-btn');
+        function autoCal() {
+            const button = document.getElementById('cal-btn');
             button.disabled = true;
-            button.textContent = 'Calibrating to Gray...';
+            button.textContent = 'Calibrating...';
 
             fetch('/auto_calibrate', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' }
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    reference_r: rgbMult.reference_r,
+                    reference_g: rgbMult.reference_g,
+                    reference_b: rgbMult.reference_b
+                })
             })
             .then(response => response.json())
             .then(data => {
                 if (data.status === 'success') {
-                    // Update local multipliers with the calibrated values
-                    rgbMultipliers.red = data.red;
-                    rgbMultipliers.green = data.green;
-                    rgbMultipliers.blue = data.blue;
-                    rgbMultipliers.brightness = data.brightness;
+                    rgbMult.red = data.red;
+                    rgbMult.green = data.green;
+                    rgbMult.blue = data.blue;
+                    rgbMult.brightness = data.brightness;
                     if (data.td_reference !== undefined) {
-                        rgbMultipliers.td_reference = data.td_reference;
+                        rgbMult.td_reference = data.td_reference;
                     }
-                    
-                    updateRGBSliders();
-                    updateTDReferenceDisplay();
-                    updateColorWithMultipliers();
-                    
-                    button.textContent = 'Calibrated to Gray Successfully!';
-                    setTimeout(() => {
-                        button.textContent = 'Auto-Calibrate to Gray';
-                        button.disabled = false;
-                    }, 2000);
+                    updateSliders();
+                    updateColorDisplay();
+                    button.textContent = 'Success!';
                 } else {
                     alert('Calibration failed: ' + (data.message || 'Unknown error'));
-                    button.textContent = 'Auto-Calibrate to Gray';
-                    button.disabled = false;
+                    button.textContent = 'Auto-Calibrate';
                 }
+                setTimeout(() => {
+                    button.textContent = 'Auto-Calibrate';
+                    button.disabled = false;
+                }, 2000);
             })
             .catch(err => {
-                console.warn('Failed to auto-calibrate:', err);
+                console.warn('Calibration failed:', err);
                 alert('Calibration failed. Please try again.');
-                button.textContent = 'Auto-Calibrate to Gray';
+                button.textContent = 'Auto-Calibrate';
                 button.disabled = false;
             });
         }
 
-        function resetRGBMultipliers() {
-            rgbMultipliers = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0 };
-            updateRGBSliders();
-            updateTDReferenceDisplay();
-
-            // Save to ESP32
-            fetch('/rgb_multipliers', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(rgbMultipliers)
-            }).catch(err => console.warn('Failed to save RGB multipliers:', err));
-
-            updateColorWithMultipliers();
+        function resetMult() {
+            rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
+            updateSliders();
+            updateRefDisplay();
+            saveMult();
+            updateColorDisplay();
         }
 
-        function updateColorWithMultipliers() {
+        function updateColorDisplay() {
             if (!currentHexColor) return;
             
-            // Parse original hex color
             const hex = currentHexColor.replace('#', '');
             let r = parseInt(hex.substr(0, 2), 16);
             let g = parseInt(hex.substr(2, 2), 16);
             let b = parseInt(hex.substr(4, 2), 16);
 
-            // Apply color multipliers first
-            let rColorCorrected = r * rgbMultipliers.red;
-            let gColorCorrected = g * rgbMultipliers.green;
-            let bColorCorrected = b * rgbMultipliers.blue;
+            // Apply multipliers
+            r = Math.round(Math.min(255, Math.max(0, r * rgbMult.red * rgbMult.brightness)));
+            g = Math.round(Math.min(255, Math.max(0, g * rgbMult.green * rgbMult.brightness)));
+            b = Math.round(Math.min(255, Math.max(0, b * rgbMult.blue * rgbMult.brightness)));
 
-            // Calculate original luminance using standard weights
-            const originalLuminance = (r * 0.299) + (g * 0.587) + (b * 0.114);
-
-            // Calculate new luminance after color correction
-            const colorCorrectedLuminance = (rColorCorrected * 0.299) + (gColorCorrected * 0.587) + (bColorCorrected * 0.114);
-
-            // Calculate brightness preservation factor for color correction
-            const colorBrightnessFactor = colorCorrectedLuminance > 0 ? originalLuminance / colorCorrectedLuminance : 1.0;
-
-            // Apply brightness preservation to color correction
-            const rBalanced = rColorCorrected * colorBrightnessFactor;
-            const gBalanced = gColorCorrected * colorBrightnessFactor;
-            const bBalanced = bColorCorrected * colorBrightnessFactor;
-
-            // Now apply the brightness multiplier
-            r = Math.round(Math.min(255, Math.max(0, rBalanced * rgbMultipliers.brightness)));
-            g = Math.round(Math.min(255, Math.max(0, gBalanced * rgbMultipliers.brightness)));
-            b = Math.round(Math.min(255, Math.max(0, bBalanced * rgbMultipliers.brightness)));
-
-            // Update display
             const correctedHex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
             document.getElementById('color-square').style.backgroundColor = correctedHex;
             document.getElementById('color-hex').textContent = correctedHex;
         }
 
-        function updateConfidence(bufferCount) {
-            const maxSamples = 50;
-            const percentage = Math.min(100, (bufferCount / maxSamples) * 100);
-
-            const confidenceFill = document.getElementById('confidence-fill');
-            const confidenceText = document.getElementById('confidence-text');
-
-            confidenceFill.style.width = percentage + '%';
-            confidenceText.textContent = `${bufferCount}/${maxSamples}`;
-
-            // Update color based on confidence level
-            if (percentage < 30) {
-                confidenceFill.style.background = '#ff4444';
-            } else if (percentage < 70) {
-                confidenceFill.style.background = 'linear-gradient(to right, #ff4444, #ffaa00)';
-            } else {
-                confidenceFill.style.background = 'linear-gradient(to right, #ffaa00, #44ff44)';
-            }
-        }
-
-        function copyHexColor() {
-            const displayedColor = document.getElementById('color-hex').textContent;
-            if (!displayedColor) return;
-
-            navigator.clipboard.writeText(displayedColor).then(() => {
-                const hexEl = document.getElementById("color-hex");
-                const originalText = hexEl.textContent;
-                hexEl.textContent = "Copied!";
-                hexEl.classList.add("copied");
-                
-                setTimeout(() => {
-                    hexEl.textContent = originalText;
-                    hexEl.classList.remove("copied");
-                }, 1500);
-            }).catch(err => {
-                console.error('Failed to copy: ', err);
-                // Fallback for older browsers
-                const textArea = document.createElement("textarea");
-                textArea.value = displayedColor;
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    alert('Color code copied to clipboard!');
-                } catch (err) {
-                    alert('Could not copy to clipboard. Color code: ' + displayedColor);
-                }
-                document.body.removeChild(textArea);
-            });
+        function copyHex() {
+            const hex = document.getElementById('color-hex').textContent;
+            if (!hex) return;
+            navigator.clipboard.writeText(hex).then(() => {
+                const el = document.getElementById("color-hex");
+                const orig = el.textContent;
+                el.textContent = "Copied!";
+                setTimeout(() => el.textContent = orig, 1500);
+            }).catch(() => alert('Color: ' + hex));
         }
 
         function saveToSpoolman() {
-            const promted_id = prompt("Please enter the Spoolman Filament ID")
-            if (promted_id === "" || !promted_id) return
-            const id = parseInt(promted_id)
-            if (isNaN(id)) {
-                alert("Invalid ID, not saving")
-                return
+            const id = prompt("Spoolman Filament ID");
+            if (!id) return;
+            const val = parseFloat(document.getElementById("content").innerText);
+            if (isNaN(val)) {
+                alert("No valid measurement");
+                return;
             }
-            const el = document.getElementById("content");
-            const value = parseFloat(el.innerText)
-            if (isNaN(value)) {
-                alert("Td currently measured is not a number or filament is not inserted.")
-                return
-            }
-            window.location.assign(`/spoolman/set?filament_id=${id}&value=${value}`)
+            window.location.assign(`/spoolman/set?filament_id=${id}&value=${val}`);
         }
 
         function connectWebSocket() {
             socket = new WebSocket(`ws://${window.location.hostname}/ws`);
-            const statusContainer = document.getElementById("status");
+            const statusEl = document.getElementById("status");
 
             socket.addEventListener("open", () => {
-                statusContainer.textContent = "Connected to WebSocket server";
-                statusContainer.classList.add("connected");
+                statusEl.textContent = "Connected";
+                statusEl.classList.add("connected");
                 fallbackEnabled = false;
                 clearInterval(fallbackInterval);
                 if (!showing_averaged) {
@@ -621,135 +452,79 @@
 
             socket.addEventListener("close", startFallback);
             socket.addEventListener("error", startFallback);
-            window.addEventListener("beforeunload", () => socket.close());
         }
 
         function startFallback() {
             if (fallbackEnabled || showing_averaged) return;
             fallbackEnabled = true;
-            document.getElementById("status").textContent = "Fallback mode enabled";
+            document.getElementById("status").textContent = "Fallback mode";
             clearInterval(intervalId);
-            fallbackInterval = setInterval(fetchFallbackData, 1000);
-            attemptReconnect();
-        }
-
-        function attemptReconnect() {
-            if (showing_averaged) return;
+            fallbackInterval = setInterval(() => {
+                fetch("/fallback")
+                    .then(response => response.text())
+                    .then(data => updateContent(data))
+                    .catch(() => document.getElementById("status").textContent = "Error");
+            }, 1000);
             setTimeout(() => {
                 if (fallbackEnabled && !showing_averaged) connectWebSocket();
             }, 5000);
         }
 
-        function fetchFallbackData() {
-            if (showing_averaged) return;
-            fetch("/fallback")
-                .then(response => response.text())
-                .then(data => updateContent(data))
-                .catch(() => document.getElementById("status").textContent = "Error fetching fallback data");
-        }
-
-        function toggleAveragedData() {
-            const averagedBtn = document.getElementById("averaged-btn");
-            if (showing_averaged) {
-                showing_averaged = false;
-                averagedBtn.textContent = "Show averaged data";
-                connectWebSocket();
-            } else {
-                document.getElementById("status").textContent = "Fetching averaged data..."
-                averagedBtn.disabled = true
-                showing_averaged = true;
-                stopConnections();
-                setTimeout(() => {
-                    fetchAveragedData();
-                }, 850)
-            }
-        }
-
-        function stopConnections() {
-            if (socket) socket.close();
-            clearInterval(intervalId);
-            clearInterval(fallbackInterval);
-        }
-
-        function fetchAveragedData() {
-            fetch("/averaged")
-                .then(response => response.text())
-                .then(data => {
-                    updateContent(data); 
-                    document.getElementById("status").textContent = "Showing averaged data"; 
-                    document.getElementById("averaged-btn").textContent = "Go back to live mode";
-                    document.getElementById("averaged-btn").disabled = false
-                })
-                .catch((e) => { document.getElementById("status").textContent = `Error: ${e}` });
-        }
-
         function updateContent(data) {
             const el = document.getElementById("content");
             const colorDisplay = document.getElementById("color-display");
-            const confidenceContainer = document.getElementById("confidence-container");
-            const colorSquare = document.getElementById("color-square");
-            const colorHex = document.getElementById("color-hex");
-            
+            const confidenceIndicator = document.getElementById("confidence-indicator");
+
             if (data === "no_filament") {
                 document.getElementById("save-to-spoolman-btn").classList.add("hidden");
                 colorDisplay.classList.add("hidden");
-                confidenceContainer.classList.add("hidden");
-                el.innerText = "No filament inserted! Insert some";
+                confidenceIndicator.classList.add("hidden");
+                el.innerText = "No filament inserted!";
                 currentHexColor = null;
                 return;
             }
             
-            // Check if data contains buffer count and RGB info (format: "value,#RRGGBB,bufferCount")
             const parts = data.split(',');
             if (parts.length >= 2 && parts[1].startsWith('#')) {
                 const numValue = parseFloat(parts[0]);
                 const hexColor = parts[1];
-                const bufferCount = parts.length >= 3 ? parseInt(parts[2]) : 0;
+                const confidence = parts.length >= 3 ? parseInt(parts[2]) || 0 : 0;
 
                 if (spoolman_available) {
                     document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
                 }
                 
-                el.innerText = isNaN(numValue) ? "An error occurred!" : numValue.toFixed(2);
-                
-                // Display color information
+                el.innerText = isNaN(numValue) ? "Error!" : numValue.toFixed(2);
                 colorDisplay.classList.remove("hidden");
-                confidenceContainer.classList.remove("hidden");
-
-                // Store original color and apply multipliers
+                confidenceIndicator.classList.remove("hidden");
                 currentHexColor = hexColor;
-                updateColorWithMultipliers();
-
-                // Update confidence indicator
-                if (!isNaN(bufferCount)) {
-                    updateConfidence(bufferCount);
-                }
+                updateColorDisplay();
+                updateConfidence(confidence);
             } else {
-                // Legacy format without RGB data
                 if (spoolman_available) {
                     document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
                 }
                 colorDisplay.classList.add("hidden");
-                confidenceContainer.classList.add("hidden");
+                confidenceIndicator.classList.add("hidden");
                 currentHexColor = null;
-                
                 const num = parseFloat(data);
-                el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
+                el.innerText = isNaN(num) ? "Error!" : num.toFixed(2);
             }
         }
 
-        // Load RGB multipliers when page loads
-        window.addEventListener('load', loadRGBMultipliers);
+        function updateConfidence(sampleCount) {
+            const maxSamples = 100; // Match the buffer size
+            const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
 
-        const start_fallback_if_ws_failed = () => {
-            if (socket.readyState === WebSocket.OPEN) return
-            startFallback()
+            document.getElementById('confidence-text').textContent = `${percentage.toFixed(0)}% (${sampleCount} samples)`;
+            document.getElementById('confidence-fill').style.width = `${percentage}%`;
         }
-        setTimeout(connectWebSocket, 300)
-        setTimeout(start_fallback_if_ws_failed, 1300)
 
+        window.addEventListener('load', loadMult);
+        setTimeout(connectWebSocket, 300);
+        setTimeout(() => {
+            if (socket && socket.readyState !== WebSocket.OPEN) startFallback();
+        }, 1300);
     </script>
 </body>
-
 </html>
-

@@ -407,8 +407,9 @@ impl WsHandler<'_> {
     {
         let multipliers = self.saved_rgb_multipliers.lock().unwrap();
         let json_response = format!(
-            r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-            multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference
+            r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}, "reference_r": {}, "reference_g": {}, "reference_b": {}}}"#,
+            multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference,
+            multipliers.reference_r, multipliers.reference_g, multipliers.reference_b
         );
 
         conn.initiate_response(200, None, &[("Content-Type", "application/json")])
@@ -457,13 +458,15 @@ impl WsHandler<'_> {
             }
         };
 
-        // Parse JSON manually (simple parsing for our specific format)
+        // Simple JSON parsing for the extended format
         let mut red = 1.0f32;
         let mut green = 1.0f32;
         let mut blue = 1.0f32;
         let mut brightness = 1.0f32;
+        let mut reference_r = 127u8;
+        let mut reference_g = 127u8;
+        let mut reference_b = 127u8;
 
-        // Simple JSON parsing for {"red": x, "green": y, "blue": z, "brightness": w}
         for part in body_str.split(',') {
             let part = part.trim().trim_matches('{').trim_matches('}');
             if let Some((key, value)) = part.split_once(':') {
@@ -475,12 +478,15 @@ impl WsHandler<'_> {
                     "green" => green = value.parse().unwrap_or(1.0),
                     "blue" => blue = value.parse().unwrap_or(1.0),
                     "brightness" => brightness = value.parse().unwrap_or(1.0),
+                    "reference_r" => reference_r = value.parse().unwrap_or(127),
+                    "reference_g" => reference_g = value.parse().unwrap_or(127),
+                    "reference_b" => reference_b = value.parse().unwrap_or(127),
                     _ => {}
                 }
             }
         }
 
-        // Clamp values to reasonable range
+        // Clamp values to reasonable ranges
         red = red.max(0.1).min(5.0);
         green = green.max(0.1).min(5.0);
         blue = blue.max(0.1).min(5.0);
@@ -498,6 +504,9 @@ impl WsHandler<'_> {
             blue,
             brightness,
             td_reference: current_td_reference,
+            reference_r,
+            reference_g,
+            reference_b,
         };
 
         // Update the in-memory multipliers
@@ -531,9 +540,60 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        log::info!("Starting automatic gray reference calibration...");
+        log::info!("Starting automatic reference color calibration...");
 
-        // First, get the current TD value for this material
+        // Read the request body to get reference color
+        let mut buffer = [0u8; 256];
+        let mut total_read = 0;
+
+        let content_length = conn.headers()?
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        if content_length > 0 && content_length <= buffer.len() {
+            while total_read < content_length {
+                let bytes_read = conn.read(&mut buffer[total_read..content_length]).await?;
+                if bytes_read == 0 {
+                    break;
+                }
+                total_read += bytes_read;
+            }
+        }
+
+        // Parse reference color from request body or use current saved values
+        let (target_r, target_g, target_b) = if total_read > 0 {
+            let body_str = str::from_utf8(&buffer[..total_read]).unwrap_or("{}");
+            let mut ref_r = 127u8;
+            let mut ref_g = 127u8;
+            let mut ref_b = 127u8;
+
+            for part in body_str.split(',') {
+                let part = part.trim().trim_matches('{').trim_matches('}');
+                if let Some((key, value)) = part.split_once(':') {
+                    let key = key.trim().trim_matches('"');
+                    let value = value.trim();
+
+                    match key {
+                        "reference_r" => ref_r = value.parse().unwrap_or(127),
+                        "reference_g" => ref_g = value.parse().unwrap_or(127),
+                        "reference_b" => ref_b = value.parse().unwrap_or(127),
+                        _ => {}
+                    }
+                }
+            }
+            (ref_r, ref_g, ref_b)
+        } else {
+            // Use current saved reference color
+            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            (multipliers.reference_r, multipliers.reference_g, multipliers.reference_b)
+        };
+
+        log::info!("Calibrating to reference color: RGB({}, {}, {})", target_r, target_g, target_b);
+
+        // Get the current TD value for this material
         let current_td = {
             let mut locked_veml = self.veml.lock().unwrap();
             match locked_veml.read_lux() {
@@ -570,42 +630,78 @@ impl WsHandler<'_> {
             return Ok(());
         }
 
-        log::info!("Current median readings for gray calibration: R={}, G={}, B={}", current_r, current_g, current_b);
+        log::info!("Current raw median readings: R={}, G={}, B={}", current_r, current_g, current_b);
 
-        // Apply current color correction to get the baseline
-        let (r_corrected, g_corrected, b_corrected) = apply_advanced_color_correction(
-            current_r, current_g, current_b, current_r, // Use red as clear for simplicity
-            self.rgb_baseline.0, self.rgb_baseline.1, self.rgb_baseline.2,
-            (self.rgb_baseline.0 + self.rgb_baseline.1 + self.rgb_baseline.2)
+        // Read clear channel
+        let clear_median = {
+            let mut locked_rgb = self.veml_rgb.lock().unwrap();
+            locked_rgb.read_clear().unwrap_or(current_r)
+        };
+
+        // Apply ONLY the base color correction (white balance and spectral response) 
+        // WITHOUT any user multipliers to get the "natural" corrected color
+        let wb_clear_estimate = (self.rgb_baseline.0 + self.rgb_baseline.1 + self.rgb_baseline.2) as f32 * 1.2;
+        let (current_corrected_r, current_corrected_g, current_corrected_b) = apply_advanced_color_correction(
+            current_r, current_g, current_b, clear_median,
+            self.rgb_baseline.0, self.rgb_baseline.1, self.rgb_baseline.2, wb_clear_estimate as u16
         );
 
-        log::info!("Color corrected readings: R={}, G={}, B={}", r_corrected, g_corrected, b_corrected);
+        log::info!("Current corrected color (no user multipliers): R={}, G={}, B={}", 
+                  current_corrected_r, current_corrected_g, current_corrected_b);
 
-        // Target: 50% gray (127, 127, 127)
-        let target_gray = 127.0;
+        // Calculate what RGB multipliers are needed to transform current corrected color to target color
+        // This is simple: multiplier = target / current
+        let red_multiplier = if current_corrected_r > 0 { 
+            target_r as f32 / current_corrected_r as f32 
+        } else { 
+            1.0 
+        };
+        
+        let green_multiplier = if current_corrected_g > 0 { 
+            target_g as f32 / current_corrected_g as f32 
+        } else { 
+            1.0 
+        };
+        
+        let blue_multiplier = if current_corrected_b > 0 { 
+            target_b as f32 / current_corrected_b as f32 
+        } else { 
+            1.0 
+        };
 
-        // Calculate multipliers to achieve perfect gray (127, 127, 127)
-        let red_multiplier = if r_corrected > 0 { target_gray / r_corrected as f32 } else { 1.0 };
-        let green_multiplier = if g_corrected > 0 { target_gray / g_corrected as f32 } else { 1.0 };
-        let blue_multiplier = if b_corrected > 0 { target_gray / b_corrected as f32 } else { 1.0 };
+        // Keep the current brightness multiplier unchanged
+        let current_brightness = {
+            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            multipliers.brightness
+        };
 
-        // For gray calibration, brightness should be 1.0 since we're targeting the exact values
-        let brightness_multiplier = 1.0;
-
-        // Clamp to reasonable ranges
+        // Clamp multipliers to reasonable ranges
         let final_red = red_multiplier.max(0.1).min(5.0);
         let final_green = green_multiplier.max(0.1).min(5.0);
         let final_blue = blue_multiplier.max(0.1).min(5.0);
 
-        log::info!("Calculated gray calibration multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}, TD_ref={:.2}",
-                  final_red, final_green, final_blue, brightness_multiplier, current_td);
+        log::info!("Calculated RGB multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3} (unchanged)", 
+                  final_red, final_green, final_blue, current_brightness);
+
+        // Verify the calculation by simulating what the final color will be
+        let (verify_r, verify_g, verify_b) = (
+            (current_corrected_r as f32 * final_red * current_brightness).round().min(255.0).max(0.0) as u8,
+            (current_corrected_g as f32 * final_green * current_brightness).round().min(255.0).max(0.0) as u8,
+            (current_corrected_b as f32 * final_blue * current_brightness).round().min(255.0).max(0.0) as u8,
+        );
+
+        log::info!("Verification - Target: RGB({},{},{}), Calculated result: RGB({},{},{})",
+                  target_r, target_g, target_b, verify_r, verify_g, verify_b);
 
         let new_multipliers = RGBMultipliers {
             red: final_red,
             green: final_green,
             blue: final_blue,
-            brightness: brightness_multiplier,
-            td_reference: current_td,  // Save the TD at calibration time
+            brightness: current_brightness, // Keep current brightness unchanged
+            td_reference: current_td,
+            reference_r: target_r,
+            reference_g: target_g,
+            reference_b: target_b,
         };
 
         // Update the in-memory multipliers
@@ -619,7 +715,7 @@ impl WsHandler<'_> {
             Ok(_) => {
                 let response = format!(
                     r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    final_red, final_green, final_blue, brightness_multiplier, current_td
+                    final_red, final_green, final_blue, current_brightness, current_td
                 );
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -636,7 +732,7 @@ impl WsHandler<'_> {
         Ok(())
     }
 
-    // Keep the old method for backwards compatibility but redirect to gray calibration
+    // Keep the old method name for backwards compatibility
     pub async fn auto_calibrate_white_reference<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -644,7 +740,6 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        // Redirect to new gray calibration
         self.auto_calibrate_gray_reference(conn).await
     }
 }
