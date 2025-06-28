@@ -3,10 +3,12 @@ use std::{
     collections::HashMap,
     str,
     sync::{Arc, Mutex},
+    fmt::{Debug, Display},
 };
 
-use edge_http::io::server::Connection;
+use edge_http::io::server::{Connection, Handler};
 use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
+use edge_http::Method as EdgeMethod;
 use edge_ws::{FrameHeader, FrameType};
 use embedded_hal::pwm::SetDutyCycle;
 use embedded_io_async::{Read, Write};
@@ -21,7 +23,7 @@ use url::Url;
 use veml7700::Veml7700;
 
 use crate::{
-    helpers::{self, read_spoolman_data, NvsData, HardwareI2cInstance, SimpleBitBangI2cInstance},
+    helpers::{self, read_spoolman_data, NvsData, HardwareI2cInstance, SimpleBitBangI2cInstance, RGBMultipliers},
     led::set_led,
     median_buffer::{RunningMedianBuffer, RunningMedianBufferU16},
     serve_algo_setup_page, serve_wifi_setup_page,
@@ -396,6 +398,258 @@ impl WsHandler<'_> {
 }
 
 impl WsHandler<'_> {
+    pub async fn get_rgb_multipliers<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+        let json_response = format!(
+            r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
+            multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference
+        );
+
+        conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+            .await?;
+        conn.write_all(json_response.as_bytes()).await?;
+        Ok(())
+    }
+
+    pub async fn set_rgb_multipliers<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        // Read the request body
+        let mut buffer = [0u8; 256];
+        let mut total_read = 0;
+
+        // Read the Content-Length header to know how much data to expect
+        let content_length = conn.headers()?
+            .headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("content-length"))
+            .and_then(|(_, value)| value.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        if content_length > buffer.len() {
+            conn.initiate_response(400, Some("Payload too large"), &[]).await?;
+            return Ok(());
+        }
+
+        while total_read < content_length {
+            let bytes_read = conn.read(&mut buffer[total_read..content_length]).await?;
+            if bytes_read == 0 {
+                break;
+            }
+            total_read += bytes_read;
+        }
+
+        let body_str = match str::from_utf8(&buffer[..total_read]) {
+            Ok(s) => s,
+            Err(_) => {
+                conn.initiate_response(400, Some("Invalid UTF-8"), &[]).await?;
+                return Ok(());
+            }
+        };
+
+        // Parse JSON manually (simple parsing for our specific format)
+        let mut red = 1.0f32;
+        let mut green = 1.0f32;
+        let mut blue = 1.0f32;
+        let mut brightness = 1.0f32;
+
+        // Simple JSON parsing for {"red": x, "green": y, "blue": z, "brightness": w}
+        for part in body_str.split(',') {
+            let part = part.trim().trim_matches('{').trim_matches('}');
+            if let Some((key, value)) = part.split_once(':') {
+                let key = key.trim().trim_matches('"');
+                let value = value.trim();
+
+                match key {
+                    "red" => red = value.parse().unwrap_or(1.0),
+                    "green" => green = value.parse().unwrap_or(1.0),
+                    "blue" => blue = value.parse().unwrap_or(1.0),
+                    "brightness" => brightness = value.parse().unwrap_or(1.0),
+                    _ => {}
+                }
+            }
+        }
+
+        // Clamp values to reasonable range
+        red = red.max(0.1).min(5.0);
+        green = green.max(0.1).min(5.0);
+        blue = blue.max(0.1).min(5.0);
+        brightness = brightness.max(0.1).min(5.0);
+
+        // Get current TD reference to preserve it
+        let current_td_reference = {
+            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            multipliers.td_reference
+        };
+
+        let new_multipliers = RGBMultipliers {
+            red,
+            green,
+            blue,
+            brightness,
+            td_reference: current_td_reference,
+        };
+
+        // Update the in-memory multipliers
+        {
+            let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            *multipliers = new_multipliers;
+        }
+
+        // Save to NVS
+        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+            Ok(_) => {
+                conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(br#"{"status": "saved"}"#).await?;
+            },
+            Err(e) => {
+                log::error!("Failed to save RGB multipliers: {:?}", e);
+                conn.initiate_response(500, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(br#"{"status": "error"}"#).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    pub async fn auto_calibrate_gray_reference<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        log::info!("Starting automatic gray reference calibration...");
+
+        // First, get the current TD value for this material
+        let current_td = {
+            let mut locked_veml = self.veml.lock().unwrap();
+            match locked_veml.read_lux() {
+                Ok(reading) => {
+                    let current_reading = reading as f32;
+                    let td_value = (current_reading / self.baseline_reading) * 100.0;
+                    self.saved_algorithm.m * td_value + self.saved_algorithm.b
+                },
+                Err(_) => {
+                    conn.initiate_response(400, None, &[("Content-Type", "application/json")])
+                        .await?;
+                    conn.write_all(br#"{"status": "error", "message": "Cannot read sensor for TD calculation"}"#).await?;
+                    return Ok(());
+                }
+            }
+        };
+
+        log::info!("Current TD value for calibration: {:.2}", current_td);
+
+        // Take current median reading from the buffers
+        let (current_r, current_g, current_b) = {
+            let buffers = self.rgb_buffers.lock().unwrap();
+            (
+                buffers.0.median().unwrap_or(0),
+                buffers.1.median().unwrap_or(0),
+                buffers.2.median().unwrap_or(0),
+            )
+        };
+
+        if current_r == 0 && current_g == 0 && current_b == 0 {
+            conn.initiate_response(400, None, &[("Content-Type", "application/json")])
+                .await?;
+            conn.write_all(br#"{"status": "error", "message": "No valid color readings available"}"#).await?;
+            return Ok(());
+        }
+
+        log::info!("Current median readings for gray calibration: R={}, G={}, B={}", current_r, current_g, current_b);
+
+        // Apply current color correction to get the baseline
+        let (r_corrected, g_corrected, b_corrected) = apply_advanced_color_correction(
+            current_r, current_g, current_b, current_r, // Use red as clear for simplicity
+            self.rgb_baseline.0, self.rgb_baseline.1, self.rgb_baseline.2,
+            (self.rgb_baseline.0 + self.rgb_baseline.1 + self.rgb_baseline.2)
+        );
+
+        log::info!("Color corrected readings: R={}, G={}, B={}", r_corrected, g_corrected, b_corrected);
+
+        // Target: 50% gray (127, 127, 127)
+        let target_gray = 127.0;
+
+        // Calculate multipliers to achieve perfect gray (127, 127, 127)
+        let red_multiplier = if r_corrected > 0 { target_gray / r_corrected as f32 } else { 1.0 };
+        let green_multiplier = if g_corrected > 0 { target_gray / g_corrected as f32 } else { 1.0 };
+        let blue_multiplier = if b_corrected > 0 { target_gray / b_corrected as f32 } else { 1.0 };
+
+        // For gray calibration, brightness should be 1.0 since we're targeting the exact values
+        let brightness_multiplier = 1.0;
+
+        // Clamp to reasonable ranges
+        let final_red = red_multiplier.max(0.1).min(5.0);
+        let final_green = green_multiplier.max(0.1).min(5.0);
+        let final_blue = blue_multiplier.max(0.1).min(5.0);
+
+        log::info!("Calculated gray calibration multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}, TD_ref={:.2}",
+                  final_red, final_green, final_blue, brightness_multiplier, current_td);
+
+        let new_multipliers = RGBMultipliers {
+            red: final_red,
+            green: final_green,
+            blue: final_blue,
+            brightness: brightness_multiplier,
+            td_reference: current_td,  // Save the TD at calibration time
+        };
+
+        // Update the in-memory multipliers
+        {
+            let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            *multipliers = new_multipliers;
+        }
+
+        // Save to NVS
+        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+            Ok(_) => {
+                let response = format!(
+                    r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
+                    final_red, final_green, final_blue, brightness_multiplier, current_td
+                );
+                conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(response.as_bytes()).await?;
+            },
+            Err(e) => {
+                log::error!("Failed to save auto-calibrated multipliers: {:?}", e);
+                conn.initiate_response(500, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(br#"{"status": "error", "message": "Failed to save calibration"}"#).await?;
+            }
+        }
+
+        Ok(())
+    }
+
+    // Keep the old method for backwards compatibility but redirect to gray calibration
+    pub async fn auto_calibrate_white_reference<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        // Redirect to new gray calibration
+        self.auto_calibrate_gray_reference(conn).await
+    }
+}
+
+impl WsHandler<'_> {
     pub async fn fallback_route<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -416,6 +670,7 @@ impl WsHandler<'_> {
             self.saved_algorithm,
             self.lux_buffer.clone(),
             self.rgb_buffers.clone(),
+            self.saved_rgb_multipliers.clone(),
         )
         .await
         .unwrap_or_default();
@@ -424,9 +679,7 @@ impl WsHandler<'_> {
         conn.write_all(data.as_ref()).await?;
         Ok(())
     }
-}
 
-impl WsHandler<'_> {
     pub async fn averaged_reading_route<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -447,12 +700,71 @@ impl WsHandler<'_> {
             self.saved_algorithm,
             self.lux_buffer.clone(),
             self.rgb_buffers.clone(),
+            self.saved_rgb_multipliers.clone(),
         )
         .await
         .unwrap_or_default();
         conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
             .await?;
         conn.write_all(data.as_ref()).await?;
+        Ok(())
+    }
+}
+
+impl Handler for WsHandler<'_> {
+    type Error<E>
+        = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
+    where
+        E: Debug;
+
+    async fn handle<T, const N: usize>(
+        &self,
+        _task_id: impl Display + Clone,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), Self::Error<T::Error>>
+    where
+        T: Read + Write,
+    {
+        let headers: &edge_http::RequestHeaders<'_, N> = conn.headers()?;
+
+        if headers.method != EdgeMethod::Get && headers.method != EdgeMethod::Post {
+            conn.initiate_response(405, Some("Method Not Allowed"), &[])
+                .await?;
+        } else if headers.path == "/" || headers.path.is_empty() {
+            WsHandler::server_index_page(self, conn).await?;
+        } else if headers.path.starts_with("/settings") {
+            WsHandler::algorithm_route(self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/wifi") {
+            WsHandler::wifi_route(self, headers.path, conn).await?;
+        } else if headers.path.starts_with("/fallback") {
+            WsHandler::fallback_route(self, conn).await?;
+        } else if headers.path.starts_with("/averaged") {
+            WsHandler::averaged_reading_route(self, conn).await?;
+        } else if headers.path.starts_with("/spoolman/set") {
+            WsHandler::spoolman_set_filament(self, headers.path, conn).await?;
+        } else if headers.path == "/rgb_multipliers" {
+            if headers.method == EdgeMethod::Get {
+                WsHandler::get_rgb_multipliers(self, conn).await?;
+            } else if headers.method == EdgeMethod::Post {
+                WsHandler::set_rgb_multipliers(self, conn).await?;
+            }
+        } else if headers.path == "/auto_calibrate" && headers.method == EdgeMethod::Post {
+            WsHandler::auto_calibrate_gray_reference(self, conn).await?;
+        }
+        /*else if headers.path.starts_with("/spoolman/filaments") {
+            WsHandler::spoolman_get_filaments(self, conn).await?;
+        } */
+        else if headers.path.starts_with("/ws") {
+            match WsHandler::ws_handler(self, conn).await {
+                Ok(_) => (),
+                Err(e) => {
+                    log::error!("WS Error: {:?}", e);
+                    return Err(e);
+                }
+            };
+        } else {
+            conn.initiate_response(404, Some("Not found"), &[]).await?;
+        }
         Ok(())
     }
 }
@@ -514,6 +826,7 @@ impl WsHandler<'_> {
                 self.saved_algorithm,
                 self.lux_buffer.clone(),
                 self.rgb_buffers.clone(),
+                self.saved_rgb_multipliers.clone(),
             )
             .await;
             let payload = match td_value {
@@ -746,6 +1059,44 @@ fn apply_advanced_color_correction(
     (r_spec, g_spec, b_spec)
 }
 
+fn apply_td_based_brightness_correction(
+    r: u8, g: u8, b: u8,
+    current_td: f32,
+    multipliers: &RGBMultipliers
+) -> (u8, u8, u8) {
+    // Calculate the TD-based brightness factor
+    // Linear relationship: higher TD = more transmission = brighter base
+    let td_ratio = multipliers.td_reference / current_td.max(0.1); // Avoid division by zero
+
+    // Apply TD-based automatic brightness adjustment
+    let auto_brightness_factor = td_ratio.max(0.1).min(10.0); // Clamp to reasonable range
+
+    log::debug!("TD-based brightness: current_td={:.2}, ref_td={:.2}, ratio={:.3}, auto_factor={:.3}",
+               current_td, multipliers.td_reference, td_ratio, auto_brightness_factor);
+
+    // Apply color multipliers first
+    let r_color_corrected = r as f32 * multipliers.red;
+    let g_color_corrected = g as f32 * multipliers.green;
+    let b_color_corrected = b as f32 * multipliers.blue;
+
+    // Apply both manual brightness and automatic TD-based brightness
+    let total_brightness = multipliers.brightness * auto_brightness_factor;
+
+    let r_final = (r_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
+    let g_final = (g_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
+    let b_final = (b_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
+
+    log::debug!("TD-brightness correction: ({},{},{}) * Color({:.2},{:.2},{:.2}) * Total_Brightness({:.2}) = ({},{},{})",
+               r, g, b, multipliers.red, multipliers.green, multipliers.blue, total_brightness,
+               r_final, g_final, b_final);
+
+    (r_final, g_final, b_final)
+}
+
+fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGBMultipliers) -> (u8, u8, u8) {
+    apply_td_based_brightness_correction(r, g, b, current_td, multipliers)
+}
+
 async fn read_data_with_buffer(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
@@ -759,6 +1110,7 @@ async fn read_data_with_buffer(
     saved_algorithm: NvsData,
     lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
     rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
+    rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
 
 
@@ -829,6 +1181,12 @@ async fn read_data_with_buffer(
         }
     }
 
+    // Get buffer count for confidence indicator
+    let buffer_count = {
+        let buffer = lux_buffer.lock().unwrap();
+        buffer.len()
+    };
+
     // Get median values for accurate measurement
     let final_median_lux = {
         let buffer = lux_buffer.lock().unwrap();
@@ -857,7 +1215,7 @@ async fn read_data_with_buffer(
     // Use a more accurate clear reference estimation based on calibration
     let wb_clear_estimate = (rgb_white_balance.0 + rgb_white_balance.1 + rgb_white_balance.2) as f32 * 1.2;
 
-    log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est={:.0}",
+    log::debug!("RGB medians: R={}, G={}, B={}, Clear={}, WB: ({},{},{}), WB Clear est: {}",
                r_median, g_median, b_median, clear_median,
                rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate);
 
@@ -867,10 +1225,16 @@ async fn read_data_with_buffer(
         rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
     );
 
-    // Create hex color string
-    let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+    // Apply user RGB multipliers with TD-based brightness adjustment
+    let (r_final, g_final, b_final) = {
+        let multipliers = rgb_multipliers.lock().unwrap();
+        apply_rgb_multipliers(r_norm, g_norm, b_norm, adjusted_td_value, &*multipliers)
+    };
 
-    let ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
+    // Create hex color string with corrected values
+    let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
+
+    let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
 
     {
         let mut led = led_light.lock().unwrap();
@@ -886,10 +1250,10 @@ async fn read_data_with_buffer(
         (lux_buf.len(), rgb_buf.0.len())
     };
 
-    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}, Lux: {}, Clear: {}",
-               adjusted_td_value, hex_color, lux_len, rgb_len,
+    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}, Lux: {}, Clear: {}",
+               adjusted_td_value, hex_color, lux_len, rgb_len, buffer_count,
                r_median, g_median, b_median,
-               r_norm, g_norm, b_norm,
+               r_final, g_final, b_final,
                saved_algorithm.b, final_median_lux, clear_median);
 
     Some(ws_message)
@@ -908,6 +1272,7 @@ pub async fn read_averaged_data_with_buffer(
     saved_algorithm: NvsData,
     lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
     rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
+    rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
     // Take a quick reading first for fast filament detection
     let mut locked_veml = veml.lock().unwrap();
@@ -1000,6 +1365,12 @@ pub async fn read_averaged_data_with_buffer(
         }
     }
 
+    // Get buffer count for confidence indicator
+    let buffer_count = {
+        let buffer = lux_buffer.lock().unwrap();
+        buffer.len()
+    };
+
     // Get median values from the filled buffers
     let median = {
         let buffer = lux_buffer.lock().unwrap();
@@ -1036,18 +1407,25 @@ pub async fn read_averaged_data_with_buffer(
         rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2, wb_clear_estimate as u16
     );
 
-    let hex_color = format!("#{:02X}{:02X}{:02X}", r_norm, g_norm, b_norm);
+    // Apply user RGB multipliers with TD-based brightness adjustment
+    let (r_final, g_final, b_final) = {
+        let multipliers = rgb_multipliers.lock().unwrap();
+        apply_rgb_multipliers(r_norm, g_norm, b_norm, adjusted_td_value, &*multipliers)
+    };
 
-    let ws_message = format!("{:.2},{}", adjusted_td_value, hex_color);
+    let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
 
+    let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
+
+    // Log buffer status and detailed color information
     let (lux_len, rgb_len) = {
         let lux_buf = lux_buffer.lock().unwrap();
         let rgb_buf = rgb_buffers.lock().unwrap();
         (lux_buf.len(), rgb_buf.0.len())
     };
 
-    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples), Raw RGB: ({},{},{}), Final RGB: ({},{},{})",
-              td_value, hex_color, lux_len, rgb_len, r_median, g_median, b_median, r_norm, g_norm, b_norm);
+    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{})",
+              td_value, hex_color, lux_len, rgb_len, buffer_count, r_median, g_median, b_median, r_final, g_final, b_final);
 
     Some(ws_message)
 }

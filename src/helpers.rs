@@ -13,6 +13,27 @@ pub struct NvsData {
     pub threshold: f32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct RGBMultipliers {
+    pub red: f32,
+    pub green: f32,
+    pub blue: f32,
+    pub brightness: f32,
+    pub td_reference: f32,  // TD value at calibration time
+}
+
+impl Default for RGBMultipliers {
+    fn default() -> Self {
+        Self {
+            red: 1.0,
+            green: 1.0,
+            blue: 1.0,
+            brightness: 1.0,
+            td_reference: 50.0,  // Default to 50% transmission
+        }
+    }
+}
+
 use esp_idf_svc::{
     hal::{
         gpio::{Gpio10, Gpio5, Gpio6, Gpio8, PinDriver, InputOutput, Pull},
@@ -495,6 +516,106 @@ pub fn save_algorithm_variables(
     nvs.set_str("b", b)?;
     nvs.set_str("threshold", threshold)?;
     Ok(())
+}
+
+pub fn get_saved_rgb_multipliers(nvs: EspNvsPartition<NvsDefault>) -> RGBMultipliers {
+    let nvs = match EspNvs::new(nvs, "rgb_mult", true) {
+        Ok(nvs) => nvs,
+        Err(_) => {
+            warn!("RGB multipliers NVS init failed");
+            return RGBMultipliers::default();
+        }
+    };
+
+    // Use smaller buffers to save memory
+    let mut red_buffer = [0u8; 32];
+    let red_value: f32 = nvs
+        .get_str("red", &mut red_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1.0);
+
+    let mut green_buffer = [0u8; 32];
+    let green_value: f32 = nvs
+        .get_str("green", &mut green_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1.0);
+
+    let mut blue_buffer = [0u8; 32];
+    let blue_value: f32 = nvs
+        .get_str("blue", &mut blue_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1.0);
+
+    let mut brightness_buffer = [0u8; 32];
+    let brightness_value: f32 = nvs
+        .get_str("brightness", &mut brightness_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(1.0);
+
+    let mut td_ref_buffer = [0u8; 32];
+    let td_reference: f32 = nvs
+        .get_str("td_reference", &mut td_ref_buffer)
+        .ok()
+        .flatten()
+        .and_then(|s| s.parse::<f32>().ok())
+        .unwrap_or(50.0);
+
+    RGBMultipliers {
+        red: red_value,
+        green: green_value,
+        blue: blue_value,
+        brightness: brightness_value,
+        td_reference,
+    }
+}
+
+pub fn save_rgb_multipliers(
+    multipliers: RGBMultipliers,
+    nvs: EspNvsPartition<NvsDefault>,
+) -> anyhow::Result<()> {
+    let mut nvs = match EspNvs::new(nvs, "rgb_mult", true) {
+        Ok(nvs) => nvs,
+        Err(_) => {
+            bail!("RGB multipliers NVS failed");
+        }
+    };
+
+    nvs.set_str("red", &multipliers.red.to_string())?;
+    nvs.set_str("green", &multipliers.green.to_string())?;
+    nvs.set_str("blue", &multipliers.blue.to_string())?;
+    nvs.set_str("brightness", &multipliers.brightness.to_string())?;
+    nvs.set_str("td_reference", &multipliers.td_reference.to_string())?;
+
+    log::info!("Saved RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}", 
+              multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference);
+    Ok(())
+}
+
+// Add function to clear corrupted NVS data if needed
+pub fn clear_rgb_multipliers_nvs(nvs: EspNvsPartition<NvsDefault>) -> anyhow::Result<()> {
+    match EspNvs::new(nvs, "rgb_mult", true) {
+        Ok(mut nvs_handle) => {
+            warn!("Clearing potentially corrupted RGB multipliers NVS data");
+            let _ = nvs_handle.remove("red");
+            let _ = nvs_handle.remove("green");
+            let _ = nvs_handle.remove("blue");
+            let _ = nvs_handle.remove("brightness");
+            let _ = nvs_handle.remove("td_reference");
+            info!("RGB multipliers NVS data cleared");
+            Ok(())
+        },
+        Err(e) => {
+            bail!("Failed to open RGB multipliers NVS for clearing: {:?}", e);
+        }
+    }
 }
 
 pub fn generate_random_11_digit_number() -> u64 {

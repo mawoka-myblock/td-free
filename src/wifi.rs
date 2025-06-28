@@ -3,7 +3,6 @@ use core::str;
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
-    time::Duration,
 };
 
 use anyhow::bail;

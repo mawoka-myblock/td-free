@@ -12,8 +12,10 @@
             display: flex;
             justify-content: center;
             align-items: center;
-            height: 100vh;
+            min-height: 100vh;
             margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
         }
 
         .container {
@@ -21,8 +23,8 @@
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
             border-radius: 10px;
             padding: 20px;
-            width: 80%;
-            max-width: 600px;
+            width: 90%;
+            max-width: 700px;
             min-height: 300px;
             overflow-y: auto;
             display: flex;
@@ -137,6 +139,163 @@
             color: #666;
             margin-bottom: 3px;
         }
+
+        .confidence-container {
+            margin: 15px auto;
+            width: 100%;
+            max-width: 300px;
+        }
+
+        .confidence-label {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+            text-align: center;
+        }
+
+        .confidence-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border: 1px solid #ccc;
+            border-radius: 10px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(to right, #ff4444, #ffaa00, #44ff44);
+            transition: width 0.3s ease, background-color 0.3s ease;
+            border-radius: 10px;
+        }
+
+        .confidence-text {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 10px;
+            font-weight: bold;
+            color: #333;
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+        }
+
+        .rgb-correction {
+            margin: 20px auto;
+            padding: 15px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            background-color: #f9f9f9;
+            max-width: 400px;
+        }
+
+        .rgb-correction h3 {
+            margin: 0 0 10px 0;
+            text-align: center;
+            color: #333;
+            font-size: 16px;
+        }
+
+        .rgb-correction .description {
+            margin: 0 0 15px 0;
+            text-align: center;
+            color: #666;
+            font-size: 12px;
+            font-style: italic;
+        }
+
+        .rgb-control {
+            display: flex;
+            align-items: center;
+            margin: 10px 0;
+            gap: 10px;
+        }
+
+        .rgb-control label {
+            font-weight: bold;
+            min-width: 20px;
+            font-size: 14px;
+        }
+
+        .rgb-control input[type="range"] {
+            flex: 1;
+            margin: 0 10px;
+        }
+
+        .rgb-control .value-display {
+            font-family: 'Courier New', monospace;
+            font-size: 12px;
+            min-width: 50px;
+            text-align: center;
+            padding: 2px 5px;
+            background-color: #fff;
+            border: 1px solid #ccc;
+            border-radius: 3px;
+        }
+
+        .rgb-control.red { border-left: 3px solid #ff4444; }
+        .rgb-control.green { border-left: 3px solid #44ff44; }
+        .rgb-control.blue { border-left: 3px solid #4444ff; }
+        .rgb-control.brightness { border-left: 3px solid #888888; }
+
+        .calibration-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #ddd;
+        }
+
+        .auto-calibrate-btn {
+            background-color: #ff9800;
+            color: white;
+            border: none;
+            padding: 8px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        .auto-calibrate-btn:hover {
+            background-color: #f57c00;
+        }
+
+        .auto-calibrate-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+
+        .reset-btn {
+            background-color: #666;
+            color: white;
+            border: none;
+            padding: 5px 15px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+            width: 100%;
+        }
+
+        .reset-btn:hover {
+            background-color: #555;
+        }
+
+        .calibration-instructions {
+            font-size: 11px;
+            color: #666;
+            text-align: center;
+            margin-bottom: 10px;
+            line-height: 1.3;
+        }
+
+        .td-reference-info {
+            text-align: center;
+            margin-bottom: 10px;
+            font-size: 12px;
+            color: #333;
+        }
     </style>
 </head>
 
@@ -145,6 +304,15 @@
         <h1>Td-Free</h1>
         <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
+
+        <div id="confidence-container" class="confidence-container hidden">
+            <div class="confidence-label">Measurement Confidence</div>
+            <div class="confidence-bar">
+                <div id="confidence-fill" class="confidence-fill"></div>
+                <div id="confidence-text" class="confidence-text">0/50</div>
+            </div>
+        </div>
+
         <div id="color-display" class="color-display hidden">
             <div id="color-square" class="color-square" onclick="copyHexColor()"></div>
             <div class="color-info">
@@ -152,10 +320,48 @@
                 <div id="color-hex" class="color-hex" onclick="copyHexColor()"></div>
             </div>
         </div>
-        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to
-            Spoolman</button>
-        <button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged
-            data</button>
+
+        <div id="rgb-correction" class="rgb-correction">
+            <h3>Manual Color & Brightness Correction</h3>
+            <div class="description">
+                Adjusts color balance and brightness independently<br>
+                <small>Brightness auto-adjusts based on TD (transmission) values</small>
+            </div>
+            <div class="rgb-control red">
+                <label>R:</label>
+                <input type="range" id="red-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('red', this.value)">
+                <div id="red-value" class="value-display">1.00</div>
+            </div>
+            <div class="rgb-control green">
+                <label>G:</label>
+                <input type="range" id="green-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('green', this.value)">
+                <div id="green-value" class="value-display">1.00</div>
+            </div>
+            <div class="rgb-control blue">
+                <label>B:</label>
+                <input type="range" id="blue-multiplier" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('blue', this.value)">
+                <div id="blue-value" class="value-display">1.00</div>
+            </div>
+            <div class="rgb-control brightness">
+                <label>☀:</label>
+                <input type="range" id="brightness-multiplier" min="0.1" max="3.0" step="0.01" value="1.00" oninput="updateRGBMultiplier('brightness', this.value)">
+                <div id="brightness-value" class="value-display">1.00</div>
+            </div>
+            
+            <div class="calibration-section">
+                <div class="td-reference-info">
+                    <small>TD Reference: <span id="td-reference-value">50.00</span>% (calibration baseline)</small>
+                </div>
+                <div class="calibration-instructions">
+                    Place gray plastic sample over sensor, then click to auto-calibrate to 50% gray
+                </div>
+                <button class="auto-calibrate-btn" id="auto-calibrate-btn" onclick="autoCalibrateGray()">Auto-Calibrate to Gray</button>
+                <button class="reset-btn" onclick="resetRGBMultipliers()">Reset to Default</button>
+            </div>
+        </div>
+
+        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to Spoolman</button>
+        <!--<button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged data</button>-->
         <div style="display: flex; flex-direction: column; margin-top: auto;">
             <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
             <a href="/settings" class="wifi-link" onclick="settings_cfg">Settings</a>
@@ -171,11 +377,182 @@
         let showing_averaged = false;
         let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
         let currentHexColor = null;
+        let rgbMultipliers = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0 };
 
-        function copyHexColor() {
+        // Load RGB multipliers from ESP32 on page load
+        function loadRGBMultipliers() {
+            fetch('/rgb_multipliers')
+                .then(response => response.json())
+                .then(data => {
+                    if (data.red !== undefined) rgbMultipliers.red = data.red;
+                    if (data.green !== undefined) rgbMultipliers.green = data.green;
+                    if (data.blue !== undefined) rgbMultipliers.blue = data.blue;
+                    if (data.brightness !== undefined) rgbMultipliers.brightness = data.brightness;
+                    if (data.td_reference !== undefined) rgbMultipliers.td_reference = data.td_reference;
+
+                    updateRGBSliders();
+                    updateTDReferenceDisplay();
+                })
+                .catch(err => console.warn('Could not load RGB multipliers:', err));
+        }
+
+        function updateTDReferenceDisplay() {
+            const tdRefEl = document.getElementById('td-reference-value');
+            if (tdRefEl && rgbMultipliers.td_reference !== undefined) {
+                tdRefEl.textContent = rgbMultipliers.td_reference.toFixed(2);
+            }
+        }
+
+        function updateRGBSliders() {
+            document.getElementById('red-multiplier').value = rgbMultipliers.red.toFixed(2);
+            document.getElementById('green-multiplier').value = rgbMultipliers.green.toFixed(2);
+            document.getElementById('blue-multiplier').value = rgbMultipliers.blue.toFixed(2);
+            document.getElementById('brightness-multiplier').value = rgbMultipliers.brightness.toFixed(2);
+            document.getElementById('red-value').textContent = rgbMultipliers.red.toFixed(2);
+            document.getElementById('green-value').textContent = rgbMultipliers.green.toFixed(2);
+            document.getElementById('blue-value').textContent = rgbMultipliers.blue.toFixed(2);
+            document.getElementById('brightness-value').textContent = rgbMultipliers.brightness.toFixed(2);
+        }
+
+        function updateRGBMultiplier(channel, value) {
+            const numValue = parseFloat(value);
+            rgbMultipliers[channel] = numValue;
+            document.getElementById(`${channel}-value`).textContent = numValue.toFixed(2);
+
+            // Save to ESP32 immediately
+            fetch('/rgb_multipliers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rgbMultipliers)
+            }).catch(err => console.warn('Failed to save RGB multipliers:', err));
+
+            // Update color display if we have a current color
+            updateColorWithMultipliers();
+        }
+
+        function autoCalibrateGray() {
+            const button = document.getElementById('auto-calibrate-btn');
+            button.disabled = true;
+            button.textContent = 'Calibrating to Gray...';
+
+            fetch('/auto_calibrate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' }
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.status === 'success') {
+                    // Update local multipliers with the calibrated values
+                    rgbMultipliers.red = data.red;
+                    rgbMultipliers.green = data.green;
+                    rgbMultipliers.blue = data.blue;
+                    rgbMultipliers.brightness = data.brightness;
+                    if (data.td_reference !== undefined) {
+                        rgbMultipliers.td_reference = data.td_reference;
+                    }
+                    
+                    updateRGBSliders();
+                    updateTDReferenceDisplay();
+                    updateColorWithMultipliers();
+                    
+                    button.textContent = 'Calibrated to Gray Successfully!';
+                    setTimeout(() => {
+                        button.textContent = 'Auto-Calibrate to Gray';
+                        button.disabled = false;
+                    }, 2000);
+                } else {
+                    alert('Calibration failed: ' + (data.message || 'Unknown error'));
+                    button.textContent = 'Auto-Calibrate to Gray';
+                    button.disabled = false;
+                }
+            })
+            .catch(err => {
+                console.warn('Failed to auto-calibrate:', err);
+                alert('Calibration failed. Please try again.');
+                button.textContent = 'Auto-Calibrate to Gray';
+                button.disabled = false;
+            });
+        }
+
+        function resetRGBMultipliers() {
+            rgbMultipliers = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0 };
+            updateRGBSliders();
+            updateTDReferenceDisplay();
+
+            // Save to ESP32
+            fetch('/rgb_multipliers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(rgbMultipliers)
+            }).catch(err => console.warn('Failed to save RGB multipliers:', err));
+
+            updateColorWithMultipliers();
+        }
+
+        function updateColorWithMultipliers() {
             if (!currentHexColor) return;
             
-            navigator.clipboard.writeText(currentHexColor).then(() => {
+            // Parse original hex color
+            const hex = currentHexColor.replace('#', '');
+            let r = parseInt(hex.substr(0, 2), 16);
+            let g = parseInt(hex.substr(2, 2), 16);
+            let b = parseInt(hex.substr(4, 2), 16);
+
+            // Apply color multipliers first
+            let rColorCorrected = r * rgbMultipliers.red;
+            let gColorCorrected = g * rgbMultipliers.green;
+            let bColorCorrected = b * rgbMultipliers.blue;
+
+            // Calculate original luminance using standard weights
+            const originalLuminance = (r * 0.299) + (g * 0.587) + (b * 0.114);
+
+            // Calculate new luminance after color correction
+            const colorCorrectedLuminance = (rColorCorrected * 0.299) + (gColorCorrected * 0.587) + (bColorCorrected * 0.114);
+
+            // Calculate brightness preservation factor for color correction
+            const colorBrightnessFactor = colorCorrectedLuminance > 0 ? originalLuminance / colorCorrectedLuminance : 1.0;
+
+            // Apply brightness preservation to color correction
+            const rBalanced = rColorCorrected * colorBrightnessFactor;
+            const gBalanced = gColorCorrected * colorBrightnessFactor;
+            const bBalanced = bColorCorrected * colorBrightnessFactor;
+
+            // Now apply the brightness multiplier
+            r = Math.round(Math.min(255, Math.max(0, rBalanced * rgbMultipliers.brightness)));
+            g = Math.round(Math.min(255, Math.max(0, gBalanced * rgbMultipliers.brightness)));
+            b = Math.round(Math.min(255, Math.max(0, bBalanced * rgbMultipliers.brightness)));
+
+            // Update display
+            const correctedHex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+            document.getElementById('color-square').style.backgroundColor = correctedHex;
+            document.getElementById('color-hex').textContent = correctedHex;
+        }
+
+        function updateConfidence(bufferCount) {
+            const maxSamples = 50;
+            const percentage = Math.min(100, (bufferCount / maxSamples) * 100);
+
+            const confidenceFill = document.getElementById('confidence-fill');
+            const confidenceText = document.getElementById('confidence-text');
+
+            confidenceFill.style.width = percentage + '%';
+            confidenceText.textContent = `${bufferCount}/${maxSamples}`;
+
+            // Update color based on confidence level
+            if (percentage < 30) {
+                confidenceFill.style.background = '#ff4444';
+            } else if (percentage < 70) {
+                confidenceFill.style.background = 'linear-gradient(to right, #ff4444, #ffaa00)';
+            } else {
+                confidenceFill.style.background = 'linear-gradient(to right, #ffaa00, #44ff44)';
+            }
+        }
+
+        function copyHexColor() {
+            const displayedColor = document.getElementById('color-hex').textContent;
+            if (!displayedColor) return;
+
+            navigator.clipboard.writeText(displayedColor).then(() => {
                 const hexEl = document.getElementById("color-hex");
                 const originalText = hexEl.textContent;
                 hexEl.textContent = "Copied!";
@@ -189,14 +566,14 @@
                 console.error('Failed to copy: ', err);
                 // Fallback for older browsers
                 const textArea = document.createElement("textarea");
-                textArea.value = currentHexColor;
+                textArea.value = displayedColor;
                 document.body.appendChild(textArea);
                 textArea.select();
                 try {
                     document.execCommand('copy');
                     alert('Color code copied to clipboard!');
                 } catch (err) {
-                    alert('Could not copy to clipboard. Color code: ' + currentHexColor);
+                    alert('Could not copy to clipboard. Color code: ' + displayedColor);
                 }
                 document.body.removeChild(textArea);
             });
@@ -309,23 +686,26 @@
         function updateContent(data) {
             const el = document.getElementById("content");
             const colorDisplay = document.getElementById("color-display");
+            const confidenceContainer = document.getElementById("confidence-container");
             const colorSquare = document.getElementById("color-square");
             const colorHex = document.getElementById("color-hex");
             
             if (data === "no_filament") {
                 document.getElementById("save-to-spoolman-btn").classList.add("hidden");
                 colorDisplay.classList.add("hidden");
+                confidenceContainer.classList.add("hidden");
                 el.innerText = "No filament inserted! Insert some";
                 currentHexColor = null;
                 return;
             }
             
-            // Check if data contains RGB info (format: "value,#RRGGBB")
+            // Check if data contains buffer count and RGB info (format: "value,#RRGGBB,bufferCount")
             const parts = data.split(',');
             if (parts.length >= 2 && parts[1].startsWith('#')) {
                 const numValue = parseFloat(parts[0]);
                 const hexColor = parts[1];
-                
+                const bufferCount = parts.length >= 3 ? parseInt(parts[2]) : 0;
+
                 if (spoolman_available) {
                     document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
                 }
@@ -334,21 +714,32 @@
                 
                 // Display color information
                 colorDisplay.classList.remove("hidden");
-                colorSquare.style.backgroundColor = hexColor;
-                colorHex.innerText = hexColor;
+                confidenceContainer.classList.remove("hidden");
+
+                // Store original color and apply multipliers
                 currentHexColor = hexColor;
+                updateColorWithMultipliers();
+
+                // Update confidence indicator
+                if (!isNaN(bufferCount)) {
+                    updateConfidence(bufferCount);
+                }
             } else {
                 // Legacy format without RGB data
                 if (spoolman_available) {
                     document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
                 }
                 colorDisplay.classList.add("hidden");
+                confidenceContainer.classList.add("hidden");
                 currentHexColor = null;
                 
                 const num = parseFloat(data);
                 el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
             }
         }
+
+        // Load RGB multipliers when page loads
+        window.addEventListener('load', loadRGBMultipliers);
 
         const start_fallback_if_ws_failed = () => {
             if (socket.readyState === WebSocket.OPEN) return
@@ -361,3 +752,4 @@
 </body>
 
 </html>
+

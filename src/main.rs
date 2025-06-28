@@ -3,13 +3,12 @@
 
 use core::fmt::{Debug, Display};
 use crate::helpers::NvsData;
+use crate::helpers::RGBMultipliers;
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use core::time::Duration;
 
-use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::{future, str};
+use std::str;
 
 use edge_http::io::server::Connection;
 use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
@@ -27,7 +26,7 @@ use embedded_io_async::{Read, Write};
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
+use esp_idf_svc::hal::usb_serial::UsbSerialDriver;
 use esp_idf_svc::io::Write as ioWrite;
 use esp_idf_svc::ipv4::{
     self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
@@ -203,7 +202,7 @@ fn main() -> Result<(), ()> {
     log::info!("Baseline readings completed with white balance calibration");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
-    let hotspot_ip = block_on(wifi::wifi_setup(
+    let _hotspot_ip = block_on(wifi::wifi_setup(
         &mut wifi,
         nvs.clone(),
         ws2812.clone(),
@@ -218,7 +217,36 @@ fn main() -> Result<(), ()> {
     let mut server = unsafe { Box::new_uninit().assume_init() };
 
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    let saved_algorithm = helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone());
+    
+    // Try to load algorithm variables with error recovery
+    let saved_algorithm = match std::panic::catch_unwind(|| {
+        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone())
+    }) {
+        Ok(algorithm) => algorithm,
+        Err(_) => {
+            log::error!("Algorithm loading caused panic - using defaults");
+            helpers::NvsData {
+                b: 0.0,
+                m: 1.0,
+                threshold: 0.8,
+            }
+        }
+    };
+    
+    // Try to load RGB multipliers with error recovery
+    let saved_rgb_multipliers = match std::panic::catch_unwind(|| {
+        helpers::get_saved_rgb_multipliers(arced_nvs.as_ref().clone())
+    }) {
+        Ok(multipliers) => multipliers,
+        Err(_) => {
+            log::error!("RGB multipliers loading caused panic - clearing NVS and using defaults");
+            // Clear the corrupted data
+            if let Err(e) = helpers::clear_rgb_multipliers_nvs(arced_nvs.as_ref().clone()) {
+                log::error!("Failed to clear RGB multipliers NVS: {:?}", e);
+            }
+            helpers::RGBMultipliers::default()
+        }
+    };
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
@@ -236,90 +264,12 @@ fn main() -> Result<(), ()> {
         &stack,
         ws2812.clone(),
         saved_algorithm,
+        saved_rgb_multipliers,
     );
-    log::warn!(
-        "Activating serial connection, hold e to keep viewing logs and disable serial interface!!!"
-    );
-    let serial_driver = UsbSerialDriver::new(
-        peripherals.usb_serial,
-        peripherals.pins.gpio18,
-        peripherals.pins.gpio19,
-        &UsbSerialConfig::new(),
-    )
-        .unwrap();
-    drop(serial_driver);
-    log::info!("USB logging enabled (development build)");
-    let exit_buffer = [0u8; 1];
-    //serial_driver.read(&mut exit_buffer, 500).unwrap();
-    let serial_future = async move {
-        if exit_buffer.iter().any(|&x| x == b'e') {
-            //drop(serial_driver);
-            log::info!("Logging reactivated!");
-            future::pending::<Result<(), anyhow::Error>>().await
-        } else {
-            //log::warn!("Logging deactivated from now on, this is last log message!");
-            //logger.set_target_level("*", log::LevelFilter::Off).unwrap();
-            //serial_connection(
-            //    &mut serial_driver,
-            //                 veml,
-            //                 veml_rgb,
-            //                 dark_baseline_reading,
-            //                 baseline_reading,
-            //                 rgb_calibration,
-            //                 dark_rgb_calibration,
-            //                 wifi_status,
-            //                 led_light,
-            //                 ws2812.clone(),
-            //                 saved_algorithm,
-            //             )
-            //             .await
-            //future::pending::<Result<(), anyhow::Error>>().await
-            Ok(())
-        }
-    };
-    // let serial_future = serial_connection(&mut serial_driver);
 
-    if hotspot_ip.is_some() {
-        log::info!("Running with captive portal");
-        let mut tx_buf = [0; 1500];
-        let mut rx_buf = [0; 1500];
-        let captive_future = edge_captive::io::run(
-            &stack,
-            SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), 53),
-            &mut tx_buf,
-            &mut rx_buf,
-            IP_ADDRESS,
-            Duration::from_secs(60),
-        );
-        let block_on_res = block_on(embassy_futures::join::join3(
-            server_future,
-            captive_future,
-            serial_future,
-        ));
-        match block_on_res.0 {
-            Ok(_) => (),
-            Err(e) => log::error!("Server error: {:?}", e),
-        };
-        match block_on_res.1 {
-            Ok(_) => (),
-            Err(e) => log::error!("Captive Portal error: {:?}", e),
-        };
-        match block_on_res.2 {
-            Ok(_) => log::info!("Logging reactivated!"),
-            Err(e) => log::error!("Serial error: {:?}", e),
-        };
-    } else {
-        log::info!("Running without captive portal");
-        let block_on_res = block_on(embassy_futures::join::join(server_future, serial_future));
-        match block_on_res.0 {
-            Ok(_) => (),
-            Err(e) => log::error!("Server error: {:?}", e),
-        };
-        match block_on_res.1 {
-            Ok(_) => log::info!("Logging reactivated!"),
-            Err(e) => log::error!("Serial error: {:?}", e),
-        };
-    }
+    // Block on the server future
+    block_on(server_future).unwrap();
+
     Ok(())
 }
 
@@ -408,22 +358,24 @@ fn take_rgb_white_balance_calibration(
     let r_ratio = r_median as f32 / g_ref;
     let b_ratio = b_median as f32 / g_ref;
 
-    // Apply color temperature correction for LED vs daylight
-    // LEDs are typically cooler (more blue) than ideal D65 daylight
-    let led_color_temp_correction_r = 1.05; // Slightly boost red
-    let led_color_temp_correction_b = 0.95; // Slightly reduce blue
+    // Apply color temperature correction based on my measurements for the sensor
+    let led_color_temp_correction_r = 1.00;
+    let led_color_temp_correction_g = 1.00;
+    let led_color_temp_correction_b = 1.00;
+
 
     let corrected_r = (r_median as f32 * led_color_temp_correction_r) as u16;
+    let corrected_g = (g_median as f32 * led_color_temp_correction_g) as u16;
     let corrected_b = (b_median as f32 * led_color_temp_correction_b) as u16;
 
     log::info!("RGB white balance raw medians: R={}, G={}, B={}, Clear={}",
               r_median, g_median, b_median, clear_median);
     log::info!("Spectral response ratios (relative to Green): R={:.3}, B={:.3}", r_ratio, b_ratio);
     log::info!("Color temperature corrected: R={}, G={}, B={}",
-              corrected_r, g_median, corrected_b);
+              corrected_r, corrected_g, corrected_b);
 
     // Return color temperature corrected values
-    (corrected_r, g_median, corrected_b)
+    (corrected_r, corrected_g, corrected_b)
 }
 
 pub async fn serial_connection<'a>(
@@ -453,6 +405,9 @@ pub async fn serial_connection<'a>(
         median_buffer::RunningMedianBufferU16::new(500),
         median_buffer::RunningMedianBufferU16::new(500),
     )));
+
+    // Create default RGB multipliers for serial connection
+    let rgb_multipliers = Arc::new(Mutex::new(RGBMultipliers::default()));
 
     let conn_loop = async {
         loop {
@@ -534,6 +489,7 @@ pub async fn serial_connection<'a>(
                 saved_algorithm,
                 lux_buffer.clone(),
                 rgb_buffers.clone(),
+                rgb_multipliers.clone(),
             )
             .await;
             
@@ -591,10 +547,14 @@ pub async fn run<'a>(
     stack: &edge_nal_std::Stack,
     ws2812b: Arc<Mutex<LedType<'a>>>,
     saved_algorithm: NvsData,
+    saved_rgb_multipliers: RGBMultipliers,
 ) -> Result<(), anyhow::Error> {
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
 
     log::info!("Running HTTP server on {addr}");
+    log::info!("Loaded RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}",
+              saved_rgb_multipliers.red, saved_rgb_multipliers.green, saved_rgb_multipliers.blue, 
+              saved_rgb_multipliers.brightness, saved_rgb_multipliers.td_reference);
 
     let acceptor = stack.bind(addr).await?;
 
@@ -610,14 +570,16 @@ pub async fn run<'a>(
         nvs,
         ws2812b,
         saved_algorithm,
-        // Initialize median buffers
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(500))),
+        saved_rgb_multipliers: Arc::new(Mutex::new(saved_rgb_multipliers)),
+        // Use smaller buffers to reduce memory usage
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))), // Reduced from 500
         rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(500),
-            median_buffer::RunningMedianBufferU16::new(500),
-            median_buffer::RunningMedianBufferU16::new(500),
+            median_buffer::RunningMedianBufferU16::new(50), // Reduced from 500
+            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(50),
         ))),
     };
+
     match server.run(None, acceptor, handler).await {
         Ok(_) => (),
         Err(e) => log::error!("server.run: {:?}", e),
@@ -640,7 +602,7 @@ impl<C, W> From<C> for WsHandlerError<C, W> {
 
 // Reduce the size of the future by using max 2 handler instead of 4
 // and by limiting the number of headers to 32 instead of 64
-type WsServer = Server<2, { DEFAULT_BUF_SIZE }, 32>;
+type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 headers
 
 struct WsHandler<'a> {
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
@@ -654,6 +616,7 @@ struct WsHandler<'a> {
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     ws2812b: Arc<Mutex<LedType<'a>>>,
     saved_algorithm: NvsData,
+    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
     // Add median buffers
     lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
     rgb_buffers: Arc<Mutex<(
@@ -663,55 +626,6 @@ struct WsHandler<'a> {
     )>>,
 }
 
-impl Handler for WsHandler<'_> {
-    type Error<E>
-        = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
-    where
-        E: Debug;
-
-    async fn handle<T, const N: usize>(
-        &self,
-        _task_id: impl Display + Clone,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), Self::Error<T::Error>>
-    where
-        T: Read + Write,
-    {
-        let headers: &edge_http::RequestHeaders<'_, N> = conn.headers()?;
-
-        if headers.method != EdgeMethod::Get {
-            conn.initiate_response(405, Some("Method Not Allowed"), &[])
-                .await?;
-        } else if headers.path == "/" || headers.path.is_empty() {
-            WsHandler::server_index_page(self, conn).await?;
-        } else if headers.path.starts_with("/settings") {
-            WsHandler::algorithm_route(self, headers.path, conn).await?;
-        } else if headers.path.starts_with("/wifi") {
-            WsHandler::wifi_route(self, headers.path, conn).await?;
-        } else if headers.path.starts_with("/fallback") {
-            WsHandler::fallback_route(self, conn).await?;
-        } else if headers.path.starts_with("/averaged") {
-            WsHandler::averaged_reading_route(self, conn).await?;
-        } else if headers.path.starts_with("/spoolman/set") {
-            WsHandler::spoolman_set_filament(self, headers.path, conn).await?;
-        }
-        /*else if headers.path.starts_with("/spoolman/filaments") {
-            WsHandler::spoolman_get_filaments(self, conn).await?;
-        } */
-        else if headers.path.starts_with("/ws") {
-            match WsHandler::ws_handler(self, conn).await {
-                Ok(_) => (),
-                Err(e) => {
-                    log::error!("WS Error: {:?}", e);
-                    return Err(e);
-                }
-            };
-        } else {
-            conn.initiate_response(404, Some("Not found"), &[]).await?;
-        }
-        Ok(())
-    }
-}
 
 fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
     format!(
