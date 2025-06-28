@@ -347,7 +347,7 @@ impl WsHandler<'_> {
             .unwrap_or_else(|| Cow::Owned("1.0".to_string()));
         let mod_threshold_value = threshold_value
             .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned("0.8".to_string()));
+            .unwrap_or_else(|| Cow::Owned("0.5".to_string()));
         let mod_spoolman_value = spoolman_value
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned("".to_string()));
@@ -377,7 +377,7 @@ impl WsHandler<'_> {
                     serve_algo_setup_page(
                         mod_b_value.parse::<f32>().unwrap_or(0.0),
                         mod_m_value.parse::<f32>().unwrap_or(1.0),
-                        mod_threshold_value.parse::<f32>().unwrap_or(0.8),
+                        mod_threshold_value.parse::<f32>().unwrap_or(0.5),
                         &mod_spoolman_value,
                         &mod_spoolman_field_name
                     )
@@ -1108,6 +1108,11 @@ async fn read_data_with_buffer(
     rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
 
+    // {
+    //     let mut led = led_light.lock().unwrap();
+    //     led.set_duty_cycle_fully_on().unwrap()
+    // }
+    // embassy_time::Timer::after_millis(15).await;
 
     // Take a quick reading first for fast filament detection
     let current_reading = {
@@ -1120,6 +1125,11 @@ async fn read_data_with_buffer(
             }
         }
     };
+    log::info!("Measured lux: {:.2}", current_reading);
+    //print saved_algorithm.threshold
+    log::info!("Saved algorithm threshold: {:.2}", saved_algorithm.threshold);
+    //print current_reading / dark_baseline_reading
+    log::info!("Current reading / dark baseline: {:.2}", current_reading / dark_baseline_reading);
 
     // Use current reading for fast "no filament" detection
     if current_reading / dark_baseline_reading > saved_algorithm.threshold {

@@ -227,22 +227,30 @@
 
             <div class="rgb-control">
                 <label>R:</label>
-                <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('red', this.value)">
+                <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00" 
+                       oninput="updateSliderDisplay('red', this.value)" 
+                       onchange="updateMultAndSave('red', this.value)">
                 <div id="red-val" class="value-display">1.00</div>
             </div>
             <div class="rgb-control">
                 <label>G:</label>
-                <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('green', this.value)">
+                <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00" 
+                       oninput="updateSliderDisplay('green', this.value)" 
+                       onchange="updateMultAndSave('green', this.value)">
                 <div id="green-val" class="value-display">1.00</div>
             </div>
             <div class="rgb-control">
                 <label>B:</label>
-                <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00" oninput="updateMult('blue', this.value)">
+                <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00" 
+                       oninput="updateSliderDisplay('blue', this.value)" 
+                       onchange="updateMultAndSave('blue', this.value)">
                 <div id="blue-val" class="value-display">1.00</div>
             </div>
             <div class="rgb-control">
                 <label>☀:</label>
-                <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00" oninput="updateMult('brightness', this.value)">
+                <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00" 
+                       oninput="updateSliderDisplay('brightness', this.value)" 
+                       onchange="updateMultAndSave('brightness', this.value)">
                 <div id="bright-val" class="value-display">1.00</div>
             </div>
 
@@ -268,6 +276,7 @@
         let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
         let currentHexColor = null;
         let rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
+        let saveTimeout = null;
 
         function loadMult() {
             fetch('/rgb_multipliers')
@@ -319,11 +328,31 @@
             saveMult();
         }
 
-        function updateMult(channel, value) {
+        // Update only the display value without saving
+        function updateSliderDisplay(channel, value) {
             const numValue = parseFloat(value);
             rgbMult[channel] = numValue;
             document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
-            saveMult();
+            updateColorDisplay();
+        }
+
+        // Update and save the value (called on slider release)
+        function updateMultAndSave(channel, value) {
+            const numValue = parseFloat(value);
+            rgbMult[channel] = numValue;
+            document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
+            
+            // Clear any pending save timeout
+            if (saveTimeout) {
+                clearTimeout(saveTimeout);
+            }
+            
+            // Save with a small delay to avoid rapid saves if user quickly moves between sliders
+            saveTimeout = setTimeout(() => {
+                saveMult();
+                saveTimeout = null;
+            }, 100);
+            
             updateColorDisplay();
         }
 

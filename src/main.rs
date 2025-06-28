@@ -228,7 +228,7 @@ fn main() -> Result<(), ()> {
             helpers::NvsData {
                 b: 0.0,
                 m: 1.0,
-                threshold: 0.8,
+                threshold: 0.5,
             }
         }
     };

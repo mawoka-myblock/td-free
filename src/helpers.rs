@@ -678,8 +678,8 @@ pub fn save_spoolman_data(url: &str, field_name: &str,nvs: EspNvsPartition<NvsDe
         }
     };
     info!("Saving Spoolman: {}", &url);
-    nvs.set_str("spoolman_url", url)?;
-    nvs.set_str("spoolman_field_name", field_name)?;
+    nvs.set_str("spool_url", url)?;  // Changed from "spoolman_url" (11 chars) to "spool_url" (9 chars)
+    nvs.set_str("spool_field", field_name)?;  // Changed from "spoolman_field_name" (18 chars) to "spool_field" (11 chars)
     Ok(())
 }
 
@@ -695,12 +695,12 @@ pub fn read_spoolman_data(nvs: EspNvsPartition<NvsDefault>) -> (Option<String>, 
 
     let mut spoolman_url_buf = vec![0; 256];
     let url = nvs
-        .get_str("spoolman_url", &mut spoolman_url_buf)
+        .get_str("spool_url", &mut spoolman_url_buf)  // Changed from "spoolman_url"
         .unwrap_or(None)
         .map(|s| s.to_string());
     let mut spoolman_field_name_buf = vec![0; 256];
     let field_name = nvs
-        .get_str("spoolman_field_name", &mut spoolman_field_name_buf)
+        .get_str("spool_field", &mut spoolman_field_name_buf)  // Changed from "spoolman_field_name"
         .unwrap_or(None)
         .map(|s| s.to_string());
     (url, field_name)
