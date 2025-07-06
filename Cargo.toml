@@ -46,6 +46,7 @@ serde = {version = "*"}
 serde_json = {version = "*"}
 libm = "0.2"
 nb = "1.1"
+futures = "0.3"
 
 [build-dependencies]
 embuild = {version = "0.33", features = ["espidf"]}

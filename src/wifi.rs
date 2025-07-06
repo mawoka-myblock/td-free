@@ -13,15 +13,58 @@ use esp_idf_svc::{
         Configuration as WifiConfiguration, EspWifi,
     },
 };
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::signal::Signal;
+use embassy_time::Duration;
 use log::{info, warn, error, debug};
+use std::sync::atomic::{AtomicBool, Ordering};
+use futures;
 
 use crate::led::set_led;
 use crate::LedType;
 
-const MAX_CONNECTION_ATTEMPTS: u8 = 3;
-const CONNECTION_TIMEOUT_MS: u64 = 10000; // 10 seconds
-const SCAN_RETRY_COUNT: u8 = 3;
+const MAX_CONNECTION_ATTEMPTS: u8 = 5;
+const CONNECTION_TIMEOUT_MS: u64 = 5000; // 5 seconds
+const SCAN_RETRY_COUNT: u8 = 5;
 const MIN_SIGNAL_STRENGTH: i8 = -80; // dBm - minimum acceptable signal strength
+
+/// Maintains WiFi connection in the background, reconnecting if disconnected.
+pub async fn wifi_connection_maintainer(
+    wifi: Arc<Mutex<AsyncWifi<EspWifi<'static>>>>,
+    ssid: String,
+    password: String,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+) {
+    loop {
+        let connected = {
+            let wifi = wifi.lock().unwrap();
+            wifi.is_connected().unwrap_or(false)
+        };
+
+        if !connected {
+            warn!("WiFi disconnected, attempting to reconnect...");
+            set_led(ws2812.clone(), 255, 255, 0); // Yellow for reconnecting
+            {
+                let mut w_status = wifi_status.lock().unwrap();
+                *w_status = WifiEnum::Working;
+            }
+            // Only lock for the duration of the call, never across .await
+            {
+                let mut wifi_guard = wifi.lock().unwrap();
+                let _ = futures::executor::block_on(wifi_guard.stop());
+            }
+            embassy_time::Timer::after_millis(1000).await;
+            {
+                let mut wifi_guard = wifi.lock().unwrap();
+                let _ = wifi_client_with_retries(&ssid, &password, &mut *wifi_guard).await;
+            }
+            // LED/status will be set by wifi_client_with_retries on success
+        }
+
+        embassy_time::Timer::after(Duration::from_secs(5)).await;
+    }
+}
 
 async fn wifi_client_with_retries(
     ssid: &str,
@@ -230,7 +273,7 @@ pub enum WifiEnum {
 }
 
 pub async fn wifi_setup(
-    wifi: &mut AsyncWifi<EspWifi<'static>>,
+    wifi: Arc<Mutex<AsyncWifi<EspWifi<'static>>>>,
     nvs: EspNvsPartition<NvsDefault>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     wifi_status: Arc<Mutex<WifiEnum>>,
@@ -246,7 +289,8 @@ pub async fn wifi_setup(
         Ok(nvs) => nvs,
         Err(e) => {
             error!("NVS read error: {:?}, starting hotspot", e);
-            let ip = wifi_hotspot(wifi).await?;
+            let mut wifi_guard = wifi.lock().unwrap();
+            let ip = wifi_hotspot(&mut *wifi_guard).await?;
             set_led(ws2812, 255, 0, 255);
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
@@ -261,7 +305,8 @@ pub async fn wifi_setup(
 
     if wifi_password.is_none() || wifi_ssid.is_none() {
         info!("SSID and/or Password not configured, starting hotspot");
-        let ip = wifi_hotspot(wifi).await?;
+        let mut wifi_guard = wifi.lock().unwrap();
+        let ip = wifi_hotspot(&mut *wifi_guard).await?;
         set_led(ws2812, 255, 0, 255);
         let mut w_status = wifi_status.lock().unwrap();
         *w_status = WifiEnum::HotSpot;
@@ -273,14 +318,32 @@ pub async fn wifi_setup(
 
     info!("Attempting to connect to WiFi network: '{}'", ssid);
 
-    let wifi_client_res = wifi_client_with_retries(ssid, password, wifi).await;
+    let client_result = {
+        let mut wifi_guard = wifi.lock().unwrap();
+        wifi_client_with_retries(ssid, password, &mut *wifi_guard).await
+    };
 
-    match wifi_client_res {
+    match client_result {
         Ok(_) => {
             info!("Successfully connected to WiFi network '{}'", ssid);
-            set_led(ws2812, 0, 255, 0); // Green for connected
+            set_led(ws2812.clone(), 0, 255, 0); // Green for connected
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::Connected;
+
+            // Start background connection maintainer
+            let wifi_arc = wifi.clone();
+            let ws2812_arc = ws2812.clone();
+            let wifi_status_arc = wifi_status.clone();
+            let ssid_str = ssid.to_string();
+            let password_str = password.to_string();
+            spawn_wifi_maintainer(
+                wifi_arc,
+                ssid_str,
+                password_str,
+                ws2812_arc,
+                wifi_status_arc,
+            );
+
             Ok((WifiEnum::Connected, None))
         }
         Err(e) => {
@@ -288,10 +351,14 @@ pub async fn wifi_setup(
             warn!("Falling back to hotspot mode");
 
             // Stop WiFi before switching to hotspot
-            let _ = wifi.stop().await;
+            {
+                let mut wifi_guard = wifi.lock().unwrap();
+                let _ = wifi_guard.stop().await;
+            }
             embassy_time::Timer::after_millis(1000).await;
 
-            let ip = wifi_hotspot(wifi).await?;
+            let mut wifi_guard = wifi.lock().unwrap();
+            let ip = wifi_hotspot(&mut *wifi_guard).await?;
             set_led(ws2812, 255, 0, 255); // Magenta for hotspot
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
@@ -367,4 +434,24 @@ async fn wifi_hotspot(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<
             bail!("Hotspot interface timed out");
         }
     }
+}
+
+/// Spawns the WiFi connection maintainer in the background.
+fn spawn_wifi_maintainer(
+    wifi: Arc<Mutex<AsyncWifi<EspWifi<'static>>>>,
+    ssid: String,
+    password: String,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+) {
+    // Use a detached thread to avoid Send issues with async_std
+    std::thread::spawn(move || {
+        futures::executor::block_on(wifi_connection_maintainer(
+            wifi,
+            ssid,
+            password,
+            ws2812,
+            wifi_status,
+        ));
+    });
 }

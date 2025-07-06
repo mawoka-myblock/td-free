@@ -55,7 +55,6 @@ mod median_buffer;
 mod routes;
 mod veml3328;
 mod wifi;
-mod calibration_optimizer;
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -202,8 +201,11 @@ fn main() -> Result<(), ()> {
     log::info!("Baseline readings completed with white balance calibration");
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
+    // Wrap wifi in Arc<Mutex<...>> to match wifi_setup signature
+    let wifi = Arc::new(Mutex::new(wifi));
+
     let _hotspot_ip = block_on(wifi::wifi_setup(
-        &mut wifi,
+        wifi.clone(),
         nvs.clone(),
         ws2812.clone(),
         wifi_status.clone(),
@@ -278,12 +280,12 @@ fn take_rgb_white_balance_calibration(
     led_light: Arc<Mutex<LedcDriver<'_>>>
 ) -> (u16, u16, u16) {
     let sample_count = 20; // Increased samples for better accuracy
-    let sample_delay = 50u32;
+    let sample_delay = 55u32;
 
     log::info!("Starting comprehensive RGB white balance calibration with {} samples", sample_count);
 
     // Take calibration readings at multiple brightness levels to account for non-linearity
-    let brightness_levels = [10, 25 ,50, 75]; // Different LED brightness levels
+    let brightness_levels = [25,]; // Different LED brightness levels
     let mut all_r_readings: Vec<u16> = Vec::new();
     let mut all_g_readings: Vec<u16> = Vec::new();
     let mut all_b_readings: Vec<u16> = Vec::new();

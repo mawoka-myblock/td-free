@@ -30,7 +30,6 @@ use crate::{
     veml3328,
     wifi::{self, WifiEnum},
     EdgeError, LedType, WsHandler, WsHandlerError,
-    calibration_optimizer::{SliderParams, optimize_sliders},
 };
 
 static INDEX_HTML: &str = include_str!("index.html");
@@ -627,93 +626,84 @@ impl WsHandler<'_> {
 
         log::info!("Current raw median readings: R={}, G={}, B={}", current_r, current_g, current_b);
 
-        // Read clear channel for brightness correction
-        let clear_median = {
-            let mut locked_rgb = self.veml_rgb.lock().unwrap();
-            locked_rgb.read_clear().unwrap_or(current_r)
-        };
-
-        // Apply ONLY the base color correction (spectral response) to get the baseline corrected color
-        let wb_clear_estimate = (self.rgb_baseline.0 + self.rgb_baseline.1 + self.rgb_baseline.2) as f32 * 1.2;
-        let (current_corrected_r, current_corrected_g, current_corrected_b) = apply_advanced_color_correction(
-            current_r, current_g, current_b, clear_median,
-            self.rgb_baseline.0, self.rgb_baseline.1, self.rgb_baseline.2, wb_clear_estimate as u16
-        );
+        let current_corrected_r = self.rgb_baseline.0 as u8;
+        let current_corrected_g = self.rgb_baseline.1 as u8;
+        let current_corrected_b = self.rgb_baseline.2 as u8;
 
         log::info!("Current corrected color (no user multipliers): R={}, G={}, B={}", 
                   current_corrected_r, current_corrected_g, current_corrected_b);
 
         // Get current multipliers as starting point for optimization
-        let (current_multipliers, preserved_td_reference) = {
-            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
-            (
-                SliderParams::new(multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness),
-                multipliers.td_reference
-            )
-        };
+        // let (current_multipliers, preserved_td_reference) = {
+        //     let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+        //     (
+        //         SliderParams::new(multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness),
+        //         multipliers.td_reference
+        //     )
+        // };
+        //
+        // log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
+        //           current_multipliers.red, current_multipliers.green, current_multipliers.blue, current_multipliers.brightness);
+        //
+        // // Run the optimization to find the best slider values
+        // let optimized_params = optimize_sliders(
+        //     (current_corrected_r, current_corrected_g, current_corrected_b),
+        //     (target_r, target_g, target_b),
+        //     current_multipliers,
+        //     current_td,
+        //     preserved_td_reference,
+        //     100 // max iterations
+        // );
+        //
+        // log::info!("Optimization result: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
+        //           optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness);
+        //
+        // // Verify the optimization result
+        // let verify_result = crate::calibration_optimizer::apply_slider_params_to_color(
+        //     (current_corrected_r, current_corrected_g, current_corrected_b),
+        //     &optimized_params,
+        //     current_td,
+        //     preserved_td_reference
+        // );
 
-        log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
-                  current_multipliers.red, current_multipliers.green, current_multipliers.blue, current_multipliers.brightness);
-
-        // Run the optimization to find the best slider values
-        let optimized_params = optimize_sliders(
-            (current_corrected_r, current_corrected_g, current_corrected_b),
-            (target_r, target_g, target_b),
-            current_multipliers,
-            current_td,
-            preserved_td_reference,
-            200 // max iterations
-        );
-
-        log::info!("Optimization result: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
-                  optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness);
-
-        // Verify the optimization result
-        let verify_result = crate::calibration_optimizer::apply_slider_params_to_color(
-            (current_corrected_r, current_corrected_g, current_corrected_b),
-            &optimized_params,
-            current_td,
-            preserved_td_reference
-        );
-
-        log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
-                  target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
-
-        let new_multipliers = RGBMultipliers {
-            red: optimized_params.red,
-            green: optimized_params.green,
-            blue: optimized_params.blue,
-            brightness: optimized_params.brightness,
-            td_reference: preserved_td_reference, // Preserve the TD reference
-            reference_r: target_r,
-            reference_g: target_g,
-            reference_b: target_b,
-        };
-
-        // Update the in-memory multipliers
-        {
-            let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
-            *multipliers = new_multipliers;
-        }
-
-        // Save to NVS
-        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
-            Ok(_) => {
-                let response = format!(
-                    r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness, preserved_td_reference
-                );
-                conn.initiate_response(200, None, &[("Content-Type", "application/json")])
-                    .await?;
-                conn.write_all(response.as_bytes()).await?;
-            },
-            Err(e) => {
-                log::error!("Failed to save optimized multipliers: {:?}", e);
-                conn.initiate_response(500, None, &[("Content-Type", "application/json")])
-                    .await?;
-                conn.write_all(br#"{"status": "error", "message": "Failed to save calibration"}"#).await?;
-            }
-        }
+        // log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
+        //           target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
+        //
+        // let new_multipliers = RGBMultipliers {
+        //     red: multipli.red,
+        //     green: optimized_params.green,
+        //     blue: optimized_params.blue,
+        //     brightness: optimized_params.brightness,
+        //     td_reference: preserved_td_reference, // Preserve the TD reference
+        //     reference_r: target_r,
+        //     reference_g: target_g,
+        //     reference_b: target_b,
+        // };
+        //
+        // // Update the in-memory multipliers
+        // {
+        //     let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
+        //     *multipliers = new_multipliers;
+        // }
+        //
+        // // Save to NVS
+        // match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+        //     Ok(_) => {
+        //         let response = format!(
+        //             r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
+        //             optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness, preserved_td_reference
+        //         );
+        //         conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+        //             .await?;
+        //         conn.write_all(response.as_bytes()).await?;
+        //     },
+        //     Err(e) => {
+        //         log::error!("Failed to save optimized multipliers: {:?}", e);
+        //         conn.initiate_response(500, None, &[("Content-Type", "application/json")])
+        //             .await?;
+        //         conn.write_all(br#"{"status": "error", "message": "Failed to save calibration"}"#).await?;
+        //     }
+        // }
 
         Ok(())
     }
@@ -978,71 +968,52 @@ fn apply_spectral_response_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u
     (r_final, g_final, b_final)
 }
 
-fn apply_advanced_color_correction(
-    r: u16, g: u16, b: u16, clear: u16,
-    wb_r: u16, wb_g: u16, wb_b: u16, wb_clear: u16
-) -> (u8, u8, u8) {
-    // Step 1: Apply spectral response correction
-    let (r_spec, g_spec, b_spec) = apply_spectral_response_correction(r, g, b, wb_r, wb_g, wb_b);
 
-    // Step 2: Apply brightness correction only if needed
-    let avg_intensity = (r_spec as f32 + g_spec as f32 + b_spec as f32) / 3.0;
-
-    // Only apply brightness boost for very dark samples
-    if avg_intensity < 20.0 && clear > 0 && wb_clear > 0 {
-        let transmission_ratio = (clear as f32 / wb_clear as f32).min(1.0).max(0.05);
-        let brightness_boost = (1.0 / transmission_ratio.powf(0.5)).min(3.0); // Cap at 3x boost
-
-        let r_boosted = (r_spec as f32 * brightness_boost).round().min(255.0) as u8;
-        let g_boosted = (g_spec as f32 * brightness_boost).round().min(255.0) as u8;
-        let b_boosted = (b_spec as f32 * brightness_boost).round().min(255.0) as u8;
-
-        log::info!("Applied brightness boost {:.2}x for dark sample: ({},{},{}) -> ({},{},{})",
-                   brightness_boost, r_spec, g_spec, b_spec, r_boosted, g_boosted, b_boosted);
-
-        return (r_boosted, g_boosted, b_boosted);
+fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGBMultipliers) -> (u8, u8, u8) {
+    // Fitted brightness function: brightness(td) = a / (td + b)
+    fn brightness(td: f32) -> f32 {
+        let a = 4.00;
+        let b = -0.900;
+        a / (td + b)
     }
 
-    log::info!("Using spectral corrected values: ({},{},{})", r_spec, g_spec, b_spec);
-    (r_spec, g_spec, b_spec)
-}
+    let safe_current_td = current_td.max(0.1);
+    let safe_ref_td = multipliers.td_reference.max(0.1);
 
-fn apply_td_based_brightness_correction(
-    r: u8, g: u8, b: u8,
-    current_td: f32,
-    multipliers: &RGBMultipliers
-) -> (u8, u8, u8) {
-    // Calculate the TD-based brightness factor
-    // Linear relationship: higher TD = more transmission = brighter base
-    let td_ratio = multipliers.td_reference / current_td.max(0.1); // Avoid division by zero
+    log::info!(
+        "Applying RGB multipliers: R={}, G={}, B={}, current_td={:.2}, ref_td={:.2}",
+        r, g, b, current_td, multipliers.td_reference
+    );
 
-    // Apply TD-based automatic brightness adjustment
-    let auto_brightness_factor = td_ratio.max(0.1).min(10.0); // Clamp to reasonable range
+    let current_brightness = brightness(safe_current_td);
+    let reference_brightness = brightness(safe_ref_td);
 
-    log::debug!("TD-based brightness: current_td={:.2}, ref_td={:.2}, ratio={:.3}, auto_factor={:.3}",
-               current_td, multipliers.td_reference, td_ratio, auto_brightness_factor);
+    let auto_brightness_factor = (current_brightness / reference_brightness).clamp(0.01, 100.0);
 
-    // Apply color multipliers first
+    log::info!(
+        "TD-based brightness: current_td={:.2}, ref_td={:.2}, auto_factor={:.3}",
+        current_td, multipliers.td_reference, auto_brightness_factor
+    );
+
+    // Apply color multipliers
     let r_color_corrected = r as f32 * multipliers.red;
     let g_color_corrected = g as f32 * multipliers.green;
     let b_color_corrected = b as f32 * multipliers.blue;
 
-    // Apply both manual brightness and automatic TD-based brightness
+    // Final brightness factor
     let total_brightness = multipliers.brightness * auto_brightness_factor;
 
-    let r_final = (r_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
-    let g_final = (g_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
-    let b_final = (b_color_corrected * total_brightness).round().min(255.0).max(0.0) as u8;
+    let r_final = (r_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
+    let g_final = (g_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
+    let b_final = (b_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
 
-    log::debug!("TD-brightness correction: ({},{},{}) * Color({:.2},{:.2},{:.2}) * Total_Brightness({:.2}) = ({},{},{})",
-               r, g, b, multipliers.red, multipliers.green, multipliers.blue, total_brightness,
-               r_final, g_final, b_final);
+    log::info!(
+        "TD-brightness correction: ({},{},{}) * Color({:.2},{:.2},{:.2}) * Total_Brightness({:.2}) = ({},{},{})",
+        r, g, b, multipliers.red, multipliers.green, multipliers.blue, total_brightness,
+        r_final, g_final, b_final
+    );
 
     (r_final, g_final, b_final)
-}
-
-fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGBMultipliers) -> (u8, u8, u8) {
-    apply_td_based_brightness_correction(r, g, b, current_td, multipliers)
 }
 
 async fn read_data_with_buffer(
@@ -1062,9 +1033,20 @@ async fn read_data_with_buffer(
 ) -> Option<String> {
 
     // Take 3 quick readings for robust filament detection using median
-    let mut detection_readings: Vec<f32> = Vec::with_capacity(3);
+    let mut detection_readings: Vec<f32> = Vec::with_capacity(5);
 
-    for i in 0..3 {
+    //print current led brightness
+    log::info!("Current LED brightness: {:?}", led_light.lock().unwrap().get_duty());
+    
+    // if not already fully on, set LED to fully on
+    if led_light.lock().unwrap().get_duty() != 256 {
+        log::info!("Setting LED to fully on for filament detection");
+        let mut led = led_light.lock().unwrap();
+        led.set_duty_cycle_fully_on().unwrap();
+        embassy_time::Timer::after_millis(100).await;
+    }
+
+    for i in 0..5 {
         let current_reading = {
             let mut locked_veml = veml.lock().unwrap();
             match locked_veml.read_lux() {
@@ -1078,10 +1060,24 @@ async fn read_data_with_buffer(
                     continue;
                 }
             }
+
         };
         detection_readings.push(current_reading);
+        //let mut buffer = lux_buffer.lock().unwrap();
+        //buffer.push(current_reading);
+        //
+        // let mut locked_rgb = veml_rgb.lock().unwrap();
+        // if let (Ok(r), Ok(g), Ok(b)) = (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
+        //     log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
+        //
+        //     let mut buffers = rgb_buffers.lock().unwrap();
+        //     buffers.0.push(r);
+        //     buffers.1.push(g);
+        //     buffers.2.push(b);
+        // }
+        // drop(locked_rgb); // Release lock
         
-        if i < 2 {
+        if i < 4 {
             embassy_time::Timer::after_millis(100).await;
         }
     }
@@ -1095,19 +1091,21 @@ async fn read_data_with_buffer(
     let variance = detection_readings.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / 3.0;
     let std_dev = variance.sqrt();
 
-    log::info!("Filament detection readings: [{:.2}, {:.2}, {:.2}] -> median: {:.2}, std_dev: {:.3}",
-              detection_readings[0], detection_readings[1], detection_readings[2], median_reading, std_dev);
+    log::info!("Filament detection readings: [{:.2}, {:.2}, {:.2},{:.2},{:.2}] -> median: {:.2}, std_dev: {:.3}",
+              detection_readings[0], detection_readings[1], detection_readings[2], detection_readings[3], detection_readings[4], median_reading, std_dev);
     
     // Warn if readings are too similar (might indicate sensor issue)
     if std_dev < 0.1 && median_reading > 10.0 {
         log::warn!("VEML7700 readings very similar (std_dev: {:.3}) - sensor might need more time", std_dev);
     }
 
-    log::info!("Detection threshold check: {:.2} / {:.2} = {:.2} (threshold: {:.2})",
-              median_reading, dark_baseline_reading, median_reading / dark_baseline_reading, saved_algorithm.threshold);
+    let brightness_diff = baseline_reading - dark_baseline_reading;
+    let current_threshold = baseline_reading - (1.0 - saved_algorithm.threshold) * brightness_diff;
+    log::info!("Detection threshold check: {:.2} (threshold: {:.2})",
+              median_reading, current_threshold);
 
     // Use median reading for filament detection
-    if median_reading / dark_baseline_reading > saved_algorithm.threshold {
+    if median_reading > current_threshold {
         // Clear buffers when no filament is detected
         {
             let mut buffer = lux_buffer.lock().unwrap();
@@ -1129,7 +1127,7 @@ async fn read_data_with_buffer(
         return Some("no_filament".to_string());
     }
 
-    // Filament is detected, now do proper measurement with median filtering
+    // Filament is detected
     log::info!("Filament detected!");
     set_led(ws2812.clone(), 0, 125, 125);
     {
@@ -1187,7 +1185,7 @@ async fn read_data_with_buffer(
         )
     };
 
-    // Calculate TD from RAW lux reading - FIXED CALCULATION
+    // Calculate TD from RAW lux reading
     let td_value = (final_median_lux / baseline_reading) * 100.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
@@ -1220,12 +1218,12 @@ async fn read_data_with_buffer(
 
     let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
 
-    {
-        let mut led = led_light.lock().unwrap();
-        if let Err(e) = led.set_duty(25) {
-            log::error!("Failed to adjust LED duty: {:?}", e);
-        }
-    }
+    // {
+    //     let mut led = led_light.lock().unwrap();
+    //     if let Err(e) = led.set_duty(25) {
+    //         log::error!("Failed to adjust LED duty: {:?}", e);
+    //     }
+    // }
 
     // Log buffer status and detailed color information
     let (lux_len, rgb_len) = {
