@@ -625,9 +625,9 @@ impl WsHandler<'_> {
         log::info!("Current raw median readings: R={}, G={}, B={}", current_r, current_g, current_b);
 
         // Get current multipliers as starting point for optimization
-        let (mut current_multipliers, preserved_td_reference) = {
+        let mut current_multipliers = {
             let multipliers = self.saved_rgb_multipliers.lock().unwrap();
-            (*multipliers, multipliers.td_reference)
+            *multipliers
         };
 
         log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
@@ -675,16 +675,20 @@ impl WsHandler<'_> {
         log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
                   target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
 
+        // Set the current TD as the new reference TD for this calibration
         let new_multipliers = RGBMultipliers {
             red: optimized_red,
             green: optimized_green,
             blue: optimized_blue,
             brightness: optimized_brightness,
-            td_reference: preserved_td_reference, // Preserve the TD reference
+            td_reference: current_td, // Set current TD as the new reference
             reference_r: target_r,
             reference_g: target_g,
             reference_b: target_b,
         };
+
+        log::info!("Setting new TD reference: {:.2} (was {:.2})", 
+                  current_td, current_multipliers.td_reference);
 
         // Update the in-memory multipliers
         {
@@ -697,7 +701,7 @@ impl WsHandler<'_> {
             Ok(_) => {
                 let response = format!(
                     r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    optimized_red, optimized_green, optimized_blue, optimized_brightness, preserved_td_reference
+                    optimized_red, optimized_green, optimized_blue, optimized_brightness, current_td
                 );
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -1139,7 +1143,7 @@ async fn read_data_with_buffer(
     rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
 
-    // Take 3 quick readings for robust filament detection using median
+    // Take quick readings for robust filament detection using median
     let mut detection_readings: Vec<f32> = Vec::with_capacity(5);
 
     //print current led brightness
@@ -1153,7 +1157,7 @@ async fn read_data_with_buffer(
             log::error!("Failed to set LED duty cycle: {:?}", e);
             return None;
         }
-        embassy_time::Timer::after_millis(100).await;
+        embassy_time::Timer::after_millis(300).await;
     }
 
     for i in 0..5 {
