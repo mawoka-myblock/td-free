@@ -624,84 +624,92 @@ impl WsHandler<'_> {
 
         log::info!("Current raw median readings: R={}, G={}, B={}", current_r, current_g, current_b);
 
-        let current_corrected_r = self.rgb_baseline.0 as u8;
-        let current_corrected_g = self.rgb_baseline.1 as u8;
-        let current_corrected_b = self.rgb_baseline.2 as u8;
-
-        log::info!("Current corrected color (no user multipliers): R={}, G={}, B={}", 
-                  current_corrected_r, current_corrected_g, current_corrected_b);
-
         // Get current multipliers as starting point for optimization
-        // let (current_multipliers, preserved_td_reference) = {
-        //     let multipliers = self.saved_rgb_multipliers.lock().unwrap();
-        //     (
-        //         SliderParams::new(multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness),
-        //         multipliers.td_reference
-        //     )
-        // };
-        //
-        // log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
-        //           current_multipliers.red, current_multipliers.green, current_multipliers.blue, current_multipliers.brightness);
-        //
-        // // Run the optimization to find the best slider values
-        // let optimized_params = optimize_sliders(
-        //     (current_corrected_r, current_corrected_g, current_corrected_b),
-        //     (target_r, target_g, target_b),
-        //     current_multipliers,
-        //     current_td,
-        //     preserved_td_reference,
-        //     100 // max iterations
-        // );
-        //
-        // log::info!("Optimization result: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
-        //           optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness);
-        //
-        // // Verify the optimization result
-        // let verify_result = crate::calibration_optimizer::apply_slider_params_to_color(
-        //     (current_corrected_r, current_corrected_g, current_corrected_b),
-        //     &optimized_params,
-        //     current_td,
-        //     preserved_td_reference
-        // );
+        let (mut current_multipliers, preserved_td_reference) = {
+            let multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            (*multipliers, multipliers.td_reference)
+        };
 
-        // log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
-        //           target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
-        //
-        // let new_multipliers = RGBMultipliers {
-        //     red: multipli.red,
-        //     green: optimized_params.green,
-        //     blue: optimized_params.blue,
-        //     brightness: optimized_params.brightness,
-        //     td_reference: preserved_td_reference, // Preserve the TD reference
-        //     reference_r: target_r,
-        //     reference_g: target_g,
-        //     reference_b: target_b,
-        // };
-        //
-        // // Update the in-memory multipliers
-        // {
-        //     let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
-        //     *multipliers = new_multipliers;
-        // }
-        //
-        // // Save to NVS
-        // match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
-        //     Ok(_) => {
-        //         let response = format!(
-        //             r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-        //             optimized_params.red, optimized_params.green, optimized_params.blue, optimized_params.brightness, preserved_td_reference
-        //         );
-        //         conn.initiate_response(200, None, &[("Content-Type", "application/json")])
-        //             .await?;
-        //         conn.write_all(response.as_bytes()).await?;
-        //     },
-        //     Err(e) => {
-        //         log::error!("Failed to save optimized multipliers: {:?}", e);
-        //         conn.initiate_response(500, None, &[("Content-Type", "application/json")])
-        //             .await?;
-        //         conn.write_all(br#"{"status": "error", "message": "Failed to save calibration"}"#).await?;
-        //     }
-        // }
+        log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
+                  current_multipliers.red, current_multipliers.green, current_multipliers.blue, current_multipliers.brightness);
+
+        // Step 1: Optimize brightness to minimize overall RGB distance
+        let optimized_brightness = optimize_brightness(
+            (current_r, current_g, current_b),
+            (target_r, target_g, target_b),
+            self.rgb_baseline,
+            current_td,
+            current_multipliers,
+            50 // max iterations for brightness
+        );
+
+        current_multipliers.brightness = optimized_brightness;
+
+        // Step 2: Fine-tune individual RGB channels
+        let (optimized_red, optimized_green, optimized_blue) = optimize_rgb_channels(
+            (current_r, current_g, current_b),
+            (target_r, target_g, target_b),
+            self.rgb_baseline,
+            current_td,
+            current_multipliers,
+            30 // max iterations per channel
+        );
+
+        current_multipliers.red = optimized_red;
+        current_multipliers.green = optimized_green;
+        current_multipliers.blue = optimized_blue;
+
+        log::info!("Optimization result: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
+                  optimized_red, optimized_green, optimized_blue, optimized_brightness);
+
+        // Verify the optimization result
+        let verify_result = apply_complete_color_correction(
+            (current_r, current_g, current_b).0,
+            (current_r, current_g, current_b).1,
+            (current_r, current_g, current_b).2,
+            self.rgb_baseline,
+            current_td,
+            &current_multipliers
+        );
+
+        log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
+                  target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
+
+        let new_multipliers = RGBMultipliers {
+            red: optimized_red,
+            green: optimized_green,
+            blue: optimized_blue,
+            brightness: optimized_brightness,
+            td_reference: preserved_td_reference, // Preserve the TD reference
+            reference_r: target_r,
+            reference_g: target_g,
+            reference_b: target_b,
+        };
+
+        // Update the in-memory multipliers
+        {
+            let mut multipliers = self.saved_rgb_multipliers.lock().unwrap();
+            *multipliers = new_multipliers;
+        }
+
+        // Save to NVS
+        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+            Ok(_) => {
+                let response = format!(
+                    r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
+                    optimized_red, optimized_green, optimized_blue, optimized_brightness, preserved_td_reference
+                );
+                conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(response.as_bytes()).await?;
+            },
+            Err(e) => {
+                log::error!("Failed to save optimized multipliers: {:?}", e);
+                conn.initiate_response(500, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(br#"{"status": "error", "message": "Failed to save calibration"}"#).await?;
+            }
+        }
 
         Ok(())
     }
@@ -846,6 +854,26 @@ fn apply_spectral_response_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u
     (r_final, g_final, b_final)
 }
 
+// New helper function to apply complete color correction pipeline
+fn apply_complete_color_correction(
+    raw_r: u16,
+    raw_g: u16,
+    raw_b: u16,
+    white_balance: (u16, u16, u16),
+    current_td: f32,
+    multipliers: &RGBMultipliers
+) -> (u8, u8, u8) {
+    // Step 1: Apply spectral response correction
+    let (corrected_r, corrected_g, corrected_b) = apply_spectral_response_correction(
+        raw_r, raw_g, raw_b,
+        white_balance.0, white_balance.1, white_balance.2
+    );
+
+    // Step 2: Apply RGB multipliers with TD-based brightness
+    apply_rgb_multipliers(corrected_r, corrected_g, corrected_b, current_td, multipliers)
+}
+
+
 
 fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGBMultipliers) -> (u8, u8, u8) {
     // Fitted brightness function: brightness(td) = a / (td + b)
@@ -894,6 +922,207 @@ fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGB
     (r_final, g_final, b_final)
 }
 
+// Helper function to calculate RGB distance
+fn calculate_rgb_distance(color1: (u8, u8, u8), color2: (u8, u8, u8)) -> f32 {
+    let dr = color1.0 as f32 - color2.0 as f32;
+    let dg = color1.1 as f32 - color2.1 as f32;
+    let db = color1.2 as f32 - color2.2 as f32;
+    (dr * dr + dg * dg + db * db).sqrt()
+}
+
+// Optimize brightness to minimize overall RGB distance
+fn optimize_brightness(
+    raw_color: (u16, u16, u16),
+    target_color: (u8, u8, u8),
+    white_balance: (u16, u16, u16),
+    current_td: f32,
+    mut multipliers: RGBMultipliers,
+    max_iterations: usize
+) -> f32 {
+    let mut best_brightness = multipliers.brightness;
+    let mut best_distance = f32::MAX;
+
+    // Current distance
+    let current_result = apply_complete_color_correction(
+        raw_color.0, raw_color.1, raw_color.2,
+        white_balance,
+        current_td,
+        &multipliers
+    );
+    let mut current_distance = calculate_rgb_distance(current_result, target_color);
+    best_distance = current_distance;
+
+    log::info!("Brightness optimization start: brightness={:.3}, distance={:.2}",
+              multipliers.brightness, current_distance);
+
+    let step_size = 0.05; // 5% steps
+    let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
+
+    for iteration in 0..max_iterations {
+        let mut improved = false;
+
+        // Try both directions if we don't know the direction yet
+        let directions = if step_direction == 0 { vec![1.0, -1.0] } else { vec![step_direction as f32] };
+
+        for &direction in &directions {
+            let test_brightness = (multipliers.brightness + direction * step_size).clamp(0.1, 3.0);
+
+            let mut test_multipliers = multipliers;
+            test_multipliers.brightness = test_brightness;
+
+            let test_result = apply_complete_color_correction(
+                raw_color.0, raw_color.1, raw_color.2,
+                white_balance,
+                current_td,
+                &test_multipliers
+            );
+
+            let test_distance = calculate_rgb_distance(test_result, target_color);
+
+            if test_distance < best_distance {
+                best_distance = test_distance;
+                best_brightness = test_brightness;
+                step_direction = direction as i32;
+                improved = true;
+
+                log::debug!("Brightness iter {}: {:.3} -> distance {:.2} (improved)",
+                          iteration, test_brightness, test_distance);
+                break;
+            }
+        }
+
+        if improved {
+            multipliers.brightness = best_brightness;
+            current_distance = best_distance;
+        } else {
+            // No improvement found, stop
+            break;
+        }
+    }
+
+    log::info!("Brightness optimization complete: {:.3} -> {:.3}, distance: {:.2} -> {:.2}",
+              multipliers.brightness, best_brightness, current_distance, best_distance);
+
+    best_brightness
+}
+
+// Fine-tune individual RGB channels
+fn optimize_rgb_channels(
+    raw_color: (u16, u16, u16),
+    target_color: (u8, u8, u8),
+    white_balance: (u16, u16, u16),
+    current_td: f32,
+    mut multipliers: RGBMultipliers,
+    max_iterations: usize
+) -> (f32, f32, f32) {
+    let step_size = 0.02; // 2% steps for fine-tuning
+
+    // Optimize each channel independently
+    let channels = ["red", "green", "blue"];
+
+    for channel in &channels {
+        let mut best_value = match *channel {
+            "red" => multipliers.red,
+            "green" => multipliers.green,
+            "blue" => multipliers.blue,
+            _ => 1.0,
+        };
+
+        let target_channel_value = match *channel {
+            "red" => target_color.0,
+            "green" => target_color.1,
+            "blue" => target_color.2,
+            _ => 127,
+        };
+
+        let mut best_channel_distance = f32::MAX;
+        let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
+
+        // Get initial channel distance
+        let initial_result = apply_complete_color_correction(
+            raw_color.0, raw_color.1, raw_color.2,
+            white_balance,
+            current_td,
+            &multipliers
+        );
+
+        let initial_channel_value = match *channel {
+            "red" => initial_result.0,
+            "green" => initial_result.1,
+            "blue" => initial_result.2,
+            _ => 127,
+        };
+
+        best_channel_distance = (initial_channel_value as f32 - target_channel_value as f32).abs();
+
+        log::info!("{} channel optimization start: multiplier={:.3}, current={}, target={}, distance={:.2}",
+                  channel, best_value, initial_channel_value, target_channel_value, best_channel_distance);
+
+        for iteration in 0..max_iterations {
+            let mut improved = false;
+
+            // Try both directions if we don't know the direction yet
+            let directions = if step_direction == 0 { vec![1.0, -1.0] } else { vec![step_direction as f32] };
+
+            for &direction in &directions {
+                let test_value = (best_value + direction * step_size).clamp(0.5, 2.0);
+
+                let mut test_multipliers = multipliers;
+                match *channel {
+                    "red" => test_multipliers.red = test_value,
+                    "green" => test_multipliers.green = test_value,
+                    "blue" => test_multipliers.blue = test_value,
+                    _ => {},
+                }
+
+                let test_result = apply_complete_color_correction(
+                    raw_color.0, raw_color.1, raw_color.2,
+                    white_balance,
+                    current_td,
+                    &test_multipliers
+                );
+
+                let test_channel_value = match *channel {
+                    "red" => test_result.0,
+                    "green" => test_result.1,
+                    "blue" => test_result.2,
+                    _ => 127,
+                };
+
+                let test_channel_distance = (test_channel_value as f32 - target_channel_value as f32).abs();
+
+                if test_channel_distance < best_channel_distance {
+                    best_channel_distance = test_channel_distance;
+                    best_value = test_value;
+                    step_direction = direction as i32;
+                    improved = true;
+
+                    log::debug!("{} iter {}: {:.3} -> value {} distance {:.2} (improved)",
+                              channel, iteration, test_value, test_channel_value, test_channel_distance);
+                    break;
+                }
+            }
+
+            if improved {
+                match *channel {
+                    "red" => multipliers.red = best_value,
+                    "green" => multipliers.green = best_value,
+                    "blue" => multipliers.blue = best_value,
+                    _ => {},
+                }
+            } else {
+                // No improvement found for this channel, move to next
+                break;
+            }
+        }
+
+        log::info!("{} channel optimization complete: {:.3}, distance: {:.2}",
+                  channel, best_value, best_channel_distance);
+    }
+
+    (multipliers.red, multipliers.green, multipliers.blue)
+}
+
 async fn read_data_with_buffer(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
@@ -920,7 +1149,10 @@ async fn read_data_with_buffer(
     if led_light.lock().unwrap().get_duty() != 256 {
         log::info!("Setting LED to fully on for filament detection");
         let mut led = led_light.lock().unwrap();
-        led.set_duty_cycle_fully_on().unwrap();
+        if let Err(e) = led.set_duty_cycle_fully_on() {
+            log::error!("Failed to set LED duty cycle: {:?}", e);
+            return None;
+        }
         embassy_time::Timer::after_millis(100).await;
     }
 

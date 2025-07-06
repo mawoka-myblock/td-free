@@ -314,7 +314,7 @@
             const numValue = parseFloat(value);
             rgbMult[channel] = numValue;
             document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
-            updateColorDisplay();
+            // No updateColorDisplay here!
         }
 
         // Update and save the value (called on slider release)
@@ -323,18 +323,8 @@
             rgbMult[channel] = numValue;
             document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
 
-            // Clear any pending save timeout
-            if (saveTimeout) {
-                clearTimeout(saveTimeout);
-            }
-
-            // Save with a small delay to avoid rapid saves if user quickly moves between sliders
-            saveTimeout = setTimeout(() => {
-                saveMult();
-                saveTimeout = null;
-            }, 100);
-
-            updateColorDisplay();
+            // Save immediately and let backend handle color update
+            saveMult();
         }
 
         function saveMult() {
@@ -399,20 +389,9 @@
 
         function updateColorDisplay() {
             if (!currentHexColor) return;
-            
-            const hex = currentHexColor.replace('#', '');
-            let r = parseInt(hex.substr(0, 2), 16);
-            let g = parseInt(hex.substr(2, 2), 16);
-            let b = parseInt(hex.substr(4, 2), 16);
-
-            // Apply multipliers
-            r = Math.round(Math.min(255, Math.max(0, r * rgbMult.red * rgbMult.brightness)));
-            g = Math.round(Math.min(255, Math.max(0, g * rgbMult.green * rgbMult.brightness)));
-            b = Math.round(Math.min(255, Math.max(0, b * rgbMult.blue * rgbMult.brightness)));
-
-            const correctedHex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-            document.getElementById('color-square').style.backgroundColor = correctedHex;
-            document.getElementById('color-hex').textContent = correctedHex;
+            // Only display the color as received from backend, do not apply multipliers again
+            document.getElementById('color-square').style.backgroundColor = currentHexColor;
+            document.getElementById('color-hex').textContent = currentHexColor;
         }
 
         function copyHex() {
@@ -489,8 +468,8 @@
         }
 
         function updateConfidence(sampleCount) {
-            const maxSamples = 100; // Match the buffer size
-            const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
+            const maxSamples = 50; // Match the buffer size
+            const percentage = Math.min(50, (sampleCount / maxSamples) * 50);
 
             document.getElementById('confidence-text').textContent = `${percentage.toFixed(0)}%`;
             document.getElementById('confidence-fill').style.width = `${percentage}%`;

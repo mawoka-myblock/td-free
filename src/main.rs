@@ -279,20 +279,20 @@ fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>
 ) -> (u16, u16, u16) {
-    let sample_count = 20; // Increased samples for better accuracy
+    let sample_count = 10; // Increased samples for better accuracy
     let sample_delay = 55u32;
 
     log::info!("Starting comprehensive RGB white balance calibration with {} samples", sample_count);
 
     // Take calibration readings at multiple brightness levels to account for non-linearity
-    let brightness_levels = [25,]; // Different LED brightness levels
+    let brightness_levels = [25,50,75]; // Different LED brightness levels
     let mut all_r_readings: Vec<u16> = Vec::new();
     let mut all_g_readings: Vec<u16> = Vec::new();
     let mut all_b_readings: Vec<u16> = Vec::new();
     let mut all_clear_readings: Vec<u16> = Vec::new();
 
     for &brightness in &brightness_levels {
-        log::info!("Taking calibration readings at {}% brightness", brightness);
+        log::info!("Taking calibration readings at {} brightness", brightness);
 
         {
             let mut led = led_light.lock().unwrap();
@@ -420,11 +420,11 @@ pub async fn run<'a>(
         saved_algorithm,
         saved_rgb_multipliers: Arc::new(Mutex::new(saved_rgb_multipliers)),
         // Use smaller buffers to reduce memory usage
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))),
         rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(100),
-            median_buffer::RunningMedianBufferU16::new(100),
-            median_buffer::RunningMedianBufferU16::new(100),
+            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(50),
         ))),
     };
 
