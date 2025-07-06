@@ -591,7 +591,7 @@ impl WsHandler<'_> {
             match locked_veml.read_lux() {
                 Ok(reading) => {
                     let current_reading = reading as f32;
-                    let td_value = (current_reading / self.baseline_reading) * 100.0;
+                    let td_value = (current_reading / self.baseline_reading) * 10.0;
                     self.saved_algorithm.m * td_value + self.saved_algorithm.b
                 },
                 Err(_) => {
@@ -748,36 +748,7 @@ impl WsHandler<'_> {
         conn.write_all(data.as_ref()).await?;
         Ok(())
     }
-
-    pub async fn averaged_reading_route<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        let data = read_averaged_data_with_buffer(
-            self.veml.clone(),
-            self.veml_rgb.clone(),
-            self.dark_baseline_reading,
-            self.baseline_reading,
-            self.rgb_baseline,
-            self.dark_rgb_baseline,
-            self.wifi_status.clone(),
-            self.led_light.clone(),
-            self.ws2812b.clone(),
-            self.saved_algorithm,
-            self.lux_buffer.clone(),
-            self.rgb_buffers.clone(),
-            self.saved_rgb_multipliers.clone(),
-        )
-        .await
-        .unwrap_or_default();
-        conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
-            .await?;
-        conn.write_all(data.as_ref()).await?;
-        Ok(())
-    }
+    
 }
 
 impl Handler for WsHandler<'_> {
@@ -807,8 +778,6 @@ impl Handler for WsHandler<'_> {
             WsHandler::wifi_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/fallback") {
             WsHandler::fallback_route(self, conn).await?;
-        } else if headers.path.starts_with("/averaged") {
-            WsHandler::averaged_reading_route(self, conn).await?;
         } else if headers.path.starts_with("/spoolman/set") {
             WsHandler::spoolman_set_filament(self, headers.path, conn).await?;
         } else if headers.path == "/rgb_multipliers" {
@@ -1095,7 +1064,7 @@ async fn read_data_with_buffer(
     };
 
     // Calculate TD from RAW lux reading
-    let td_value = (final_median_lux / baseline_reading) * 100.0;
+    let td_value = (final_median_lux / baseline_reading) * 10.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
     // Read clear channel for brightness correction (RAW)
@@ -1150,177 +1119,3 @@ async fn read_data_with_buffer(
     Some(ws_message)
 }
 
-pub async fn read_averaged_data_with_buffer(
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),
-    _dark_rgb_baseline: (u16, u16, u16),
-    wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'_>>>,
-    ws2812: Arc<Mutex<LedType<'_>>>,
-    saved_algorithm: NvsData,
-    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
-    rgb_buffers: Arc<Mutex<(RunningMedianBufferU16, RunningMedianBufferU16, RunningMedianBufferU16)>>,
-    rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
-) -> Option<String> {
-    // Take a reading with proper delay for fast filament detection
-    let mut locked_veml = veml.lock().unwrap();
-    let current_reading = match locked_veml.read_lux() {
-        Ok(d) => d as f32,
-        Err(e) => {
-            log::error!("Failed to read sensor: {:?}", e);
-            return None;
-        }
-    };
-    drop(locked_veml); // Release lock
-
-    // Use current reading for fast "no filament" detection
-    if current_reading / dark_baseline_reading > saved_algorithm.threshold {
-        let wifi_stat = wifi_status.lock().unwrap();
-        match *wifi_stat {
-            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-        }
-        log::info!("No filament detected!");
-        return Some("no_filament".to_string());
-    }
-
-    // Filament is detected, proceed with intensive sampling
-    log::info!("Filament detected!");
-    set_led(ws2812.clone(), 0, 125, 125);
-    {
-        let mut led = led_light.lock().unwrap();
-        if let Err(e) = led.set_duty_cycle_fully_on() {
-            log::error!("Failed to set LED duty cycle: {:?}", e);
-            return None;
-        }
-    }
-
-    // Clear buffers for fresh sampling
-    {
-        let mut buffer = lux_buffer.lock().unwrap();
-        buffer.clear();
-    }
-    {
-        let mut buffers = rgb_buffers.lock().unwrap();
-        buffers.0.clear();
-        buffers.1.clear();
-        buffers.2.clear();
-    }
-
-    // Wait for LED to stabilize
-    embassy_time::Timer::after_millis(100).await;
-
-    // For averaged data, we'll take more intensive sampling with proper delays
-    let sample_count = 100;
-    let mut clear_readings_raw = Vec::with_capacity(sample_count);
-
-    // Take many samples with proper spacing for VEML7700
-    for i in 0..sample_count {
-        let mut locked_veml = veml.lock().unwrap();
-        let clr = match locked_veml.read_lux() {
-            Ok(d) => d,
-            Err(e) => {
-                log::error!("Failed to read sensor on sample {}: {:?}", i, e);
-                continue;
-            }
-        };
-        drop(locked_veml); // Release lock
-
-        // Store RAW lux value
-        {
-            let mut buffer = lux_buffer.lock().unwrap();
-            buffer.push(clr as f32);
-        }
-
-        // Store RAW RGB values
-        let mut locked_rgb = veml_rgb.lock().unwrap();
-        if let (Ok(r), Ok(g), Ok(b), Ok(clear)) = (
-            locked_rgb.read_red(),
-            locked_rgb.read_green(),
-            locked_rgb.read_blue(),
-            locked_rgb.read_clear()
-        ) {
-            let mut buffers = rgb_buffers.lock().unwrap();
-            buffers.0.push(r); // Store RAW red
-            buffers.1.push(g); // Store RAW green
-            buffers.2.push(b); // Store RAW blue
-            clear_readings_raw.push(clear); // Store RAW clear
-        }
-        drop(locked_rgb); // Release lock
-
-        // Longer delay to ensure fresh VEML7700 readings (at least one integration time)
-        embassy_time::Timer::after_millis(30).await; // Increased from 12ms to 30ms
-    }
-
-    // Get buffer count for confidence indicator
-    let buffer_count = {
-        let buffer = lux_buffer.lock().unwrap();
-        buffer.len()
-    };
-
-    // Get RAW median values from the filled buffers
-    let median_lux_raw = {
-        let buffer = lux_buffer.lock().unwrap();
-        buffer.median().unwrap_or(current_reading)
-    };
-
-    let (r_median_raw, g_median_raw, b_median_raw) = {
-        let buffers = rgb_buffers.lock().unwrap();
-        (
-            buffers.0.median().unwrap_or(rgb_white_balance.0),
-            buffers.1.median().unwrap_or(rgb_white_balance.1),
-            buffers.2.median().unwrap_or(rgb_white_balance.2),
-        )
-    };
-
-    // Calculate RAW clear median
-    let clear_median_raw = if !clear_readings_raw.is_empty() {
-        clear_readings_raw.sort();
-        clear_readings_raw[clear_readings_raw.len() / 2]
-    } else {
-        rgb_white_balance.0 // Fallback
-    };
-
-    // Calculate TD from RAW lux reading - FIXED CALCULATION
-    let td_value = (median_lux_raw / baseline_reading) * 100.0;
-    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-
-    log::debug!("RAW median values: Lux={:.2}, RGB=({},{},{}), Clear={}",
-               median_lux_raw, r_median_raw, g_median_raw, b_median_raw, clear_median_raw);
-
-    // NOW apply calibration/correction to the RAW median values
-    // Step 1: Apply spectral response correction to RAW medians
-    let (r_corrected, g_corrected, b_corrected) = apply_spectral_response_correction(
-        r_median_raw, g_median_raw, b_median_raw,
-        rgb_white_balance.0, rgb_white_balance.1, rgb_white_balance.2
-    );
-
-    log::info!("Spectral corrected RGB: ({},{},{})", r_corrected, g_corrected, b_corrected);
-
-    // Step 2: Apply user RGB multipliers with TD-based brightness adjustment to corrected values
-    let (r_final, g_final, b_final) = {
-        let multipliers = rgb_multipliers.lock().unwrap();
-        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, adjusted_td_value, &*multipliers)
-    };
-
-    // Create hex color string with corrected values
-    let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
-
-    let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
-
-    // Log buffer status and detailed color information
-    let (lux_len, rgb_len) = {
-        let lux_buf = lux_buffer.lock().unwrap();
-        let rgb_buf = rgb_buffers.lock().unwrap();
-        (lux_buf.len(), rgb_buf.0.len())
-    };
-
-    log::info!("Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{})",
-              adjusted_td_value, hex_color, lux_len, rgb_len, buffer_count, r_median_raw, g_median_raw, b_median_raw, r_final, g_final, b_final);
-
-    Some(ws_message)
-}
