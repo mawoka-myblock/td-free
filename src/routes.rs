@@ -7,9 +7,7 @@ use std::{
 };
 
 use edge_http::io::server::{Connection, Handler};
-use edge_http::ws::MAX_BASE64_KEY_RESPONSE_LEN;
 use edge_http::Method as EdgeMethod;
-use edge_ws::{FrameHeader, FrameType};
 use embedded_hal::pwm::SetDutyCycle;
 use embedded_io_async::{Read, Write};
 use embedded_svc::http::client::Client;
@@ -38,7 +36,7 @@ impl WsHandler<'_> {
     pub async fn server_index_page<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -69,7 +67,7 @@ impl WsHandler<'_> {
         &self,
         path: &str,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -194,7 +192,7 @@ impl WsHandler<'_> {
         &self,
         path: &str,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -293,7 +291,7 @@ impl WsHandler<'_> {
         &self,
         path: &str,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -396,7 +394,7 @@ impl WsHandler<'_> {
     pub async fn get_rgb_multipliers<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -416,7 +414,7 @@ impl WsHandler<'_> {
     pub async fn set_rgb_multipliers<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -531,7 +529,7 @@ impl WsHandler<'_> {
     pub async fn auto_calibrate_gray_reference<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -712,7 +710,7 @@ impl WsHandler<'_> {
     pub async fn auto_calibrate_white_reference<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -724,7 +722,7 @@ impl WsHandler<'_> {
     pub async fn fallback_route<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -754,7 +752,7 @@ impl WsHandler<'_> {
     pub async fn averaged_reading_route<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
     where
         T: Read + Write,
     {
@@ -784,7 +782,7 @@ impl WsHandler<'_> {
 
 impl Handler for WsHandler<'_> {
     type Error<E>
-        = WsHandlerError<EdgeError<E>, edge_ws::Error<E>>
+        = WsHandlerError<EdgeError<E>>
     where
         E: Debug;
 
@@ -825,99 +823,10 @@ impl Handler for WsHandler<'_> {
         /*else if headers.path.starts_with("/spoolman/filaments") {
             WsHandler::spoolman_get_filaments(self, conn).await?;
         } */
-        else if headers.path.starts_with("/ws") {
-            match WsHandler::ws_handler(self, conn).await {
-                Ok(_) => (),
-                Err(e) => {
-                    log::error!("WS Error: {:?}", e);
-                    return Err(e);
-                }
-            };
-        } else {
+        else {
             conn.initiate_response(404, Some("Not found"), &[]).await?;
         }
         Ok(())
-    }
-}
-
-impl WsHandler<'_> {
-    pub async fn ws_handler<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>, edge_ws::Error<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        let mut buf = unsafe { Box::<[u8; 8192]>::new_uninit().assume_init() };
-        let buf = buf.as_mut_slice();
-        let resp_buf = &mut buf[..MAX_BASE64_KEY_RESPONSE_LEN];
-        conn.initiate_ws_upgrade_response(resp_buf.try_into().unwrap())
-            .await?;
-        conn.complete().await?;
-        let mut socket = conn.unbind()?;
-
-        loop {
-            // header.mask_key = None; // Servers never mask the payload
-
-            // if matches!(header.frame_type, FrameType::Ping) {
-            //     header.frame_type = FrameType::Pong;
-            // }
-            let mut recv_header = FrameHeader::recv(&mut socket)
-                .await
-                .map_err(WsHandlerError::Ws)?;
-            let payload = recv_header
-                .recv_payload(&mut socket, buf)
-                .await
-                .map_err(WsHandlerError::Ws)?;
-
-            recv_header.mask_key = None; // Servers never mask the payload
-
-            if matches!(recv_header.frame_type, FrameType::Ping) {
-                recv_header.frame_type = FrameType::Pong;
-            }
-            recv_header
-                .send(&mut socket)
-                .await
-                .map_err(WsHandlerError::Ws)?;
-            recv_header
-                .send_payload(&mut socket, payload)
-                .await
-                .map_err(WsHandlerError::Ws)?;
-
-            let td_value = read_data_with_buffer(
-                self.veml.clone(),
-                self.veml_rgb.clone(),
-                self.dark_baseline_reading,
-                self.baseline_reading,
-                self.rgb_baseline,
-                self.dark_rgb_baseline,
-                self.wifi_status.clone(),
-                self.led_light.clone(),
-                self.ws2812b.clone(),
-                self.saved_algorithm,
-                self.lux_buffer.clone(),
-                self.rgb_buffers.clone(),
-                self.saved_rgb_multipliers.clone(),
-            )
-            .await;
-            let payload = match td_value {
-                Some(d) => d,
-                None => "error".to_string(),
-            };
-            log::info!("length: {:?}, data: {payload}", payload.len() as u64);
-            let header = FrameHeader {
-                frame_type: FrameType::Text(false),
-                payload_len: payload.len() as u64,
-                mask_key: None,
-            };
-            header.send(&mut socket).await.map_err(WsHandlerError::Ws)?;
-            header
-                .send_payload(&mut socket, payload.as_ref())
-                .await
-                .map_err(WsHandlerError::Ws)?;
-
-            embassy_time::Timer::after_millis(125).await; // Increased rate by 4x (was 500ms)
-        }
     }
 }
 
@@ -1415,4 +1324,3 @@ pub async fn read_averaged_data_with_buffer(
 
     Some(ws_message)
 }
-

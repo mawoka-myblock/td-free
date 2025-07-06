@@ -33,20 +33,6 @@
             margin-bottom: 20px;
         }
 
-        .status {
-            text-align: center;
-            padding: 10px;
-            background-color: #fbe9e7;
-            color: #d32f2f;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-
-        .status.connected {
-            background-color: #e8f5e9;
-            color: #388e3c;
-        }
-
         #content {
             text-align: center;
             font-size: 3rem;
@@ -201,7 +187,6 @@
 <body>
     <div class="container">
         <h1>Td-Free</h1>
-        <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
 
         <div id="color-display" class="color-display hidden">
@@ -268,11 +253,7 @@
     </div>
 
     <script>
-        let socket;
         let intervalId;
-        let fallbackInterval;
-        let fallbackEnabled = false;
-        let showing_averaged = false;
         let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
         let currentHexColor = null;
         let rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
@@ -456,47 +437,13 @@
             window.location.assign(`/spoolman/set?filament_id=${id}&value=${val}`);
         }
 
-        function connectWebSocket() {
-            socket = new WebSocket(`ws://${window.location.hostname}/ws`);
-            const statusEl = document.getElementById("status");
-
-            socket.addEventListener("open", () => {
-                statusEl.textContent = "Connected";
-                statusEl.classList.add("connected");
-                fallbackEnabled = false;
-                clearInterval(fallbackInterval);
-                if (!showing_averaged) {
-                    intervalId = setInterval(() => {
-                        if (socket.readyState === WebSocket.OPEN) {
-                            socket.send("p");
-                        }
-                    }, 1000);
-                }
-            });
-
-            socket.addEventListener("message", (event) => {
-                if (event.data === 'p') return;
-                if (!showing_averaged) updateContent(event.data);
-            });
-
-            socket.addEventListener("close", startFallback);
-            socket.addEventListener("error", startFallback);
-        }
-
-        function startFallback() {
-            if (fallbackEnabled || showing_averaged) return;
-            fallbackEnabled = true;
-            document.getElementById("status").textContent = "Fallback mode";
-            clearInterval(intervalId);
-            fallbackInterval = setInterval(() => {
+        function startPolling() {
+            intervalId = setInterval(() => {
                 fetch("/fallback")
                     .then(response => response.text())
                     .then(data => updateContent(data))
-                    .catch(() => document.getElementById("status").textContent = "Error");
+                    .catch(err => console.warn('Polling error:', err));
             }, 1000);
-            setTimeout(() => {
-                if (fallbackEnabled && !showing_averaged) connectWebSocket();
-            }, 5000);
         }
 
         function updateContent(data) {
@@ -550,10 +497,7 @@
         }
 
         window.addEventListener('load', loadMult);
-        setTimeout(connectWebSocket, 300);
-        setTimeout(() => {
-            if (socket && socket.readyState !== WebSocket.OPEN) startFallback();
-        }, 1300);
+        setTimeout(startPolling, 300);
     </script>
 </body>
 </html>

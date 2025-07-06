@@ -380,160 +380,6 @@ fn take_rgb_white_balance_calibration(
     (corrected_r, corrected_g, corrected_b)
 }
 
-pub async fn serial_connection<'a>(
-    conn: &mut UsbSerialDriver<'static>,
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
-    rgb_baseline: (u16, u16, u16),
-    dark_rgb_baseline: (u16, u16, u16),
-    wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'a>>>,
-    ws2812: Arc<Mutex<LedType<'a>>>,
-    saved_algorithm: NvsData,
-) -> Result<(), anyhow::Error> {
-    let mut buffer = [0u8; 64]; // Buffer for reading incoming data
-    let trigger_measurement = Arc::new(AtomicBool::new(false));
-    let trigger_clone = trigger_measurement.clone();
-    let channel = Channel::<NoopRawMutex, String, 1>::new();
-    let recv = channel.receiver();
-    let send = channel.sender();
-
-    // Create median buffers for serial connection
-    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100)));
-    let rgb_buffers = Arc::new(Mutex::new((
-        median_buffer::RunningMedianBufferU16::new(100),
-        median_buffer::RunningMedianBufferU16::new(100),
-        median_buffer::RunningMedianBufferU16::new(100),
-    )));
-
-    // Create default RGB multipliers for serial connection
-    let rgb_multipliers = Arc::new(Mutex::new(RGBMultipliers::default()));
-
-    let conn_loop = async {
-        loop {
-            // Step 1: Wait for "connect\n" from Python script
-            if trigger_measurement.load(Ordering::SeqCst) {
-                embassy_time::Timer::after_millis(300).await;
-            } else {
-                embassy_time::Timer::after_millis(600).await;
-            }
-
-            let n = match conn.read(&mut buffer, 50) {
-                Ok(n) if n > 0 => Some(n),
-                _ => None, // No data, continue looping
-            };
-
-            if let Some(n) = n {
-                let received: &str = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
-
-                match received {
-                    "connect" => {
-                        conn.write(b"ready\n", 100).unwrap();
-                    }
-                    "P" | "HF" => {
-                        trigger_measurement.store(true, Ordering::SeqCst);
-                        conn.write(b"connected to HF unlicensed\n", 100).unwrap();
-                    }
-                    "version" => {
-                        conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
-                    }
-                    _ => {}
-                }
-                conn.flush().unwrap();
-            } else if trigger_measurement.load(Ordering::SeqCst)
-                && let Ok(msg) = recv.try_receive()
-            {
-                conn.write(msg.as_bytes(), 500).unwrap();
-                conn.flush().unwrap();
-                recv.clear();
-            }
-            continue;
-        }
-    };
-    let measurement_loop = async {
-        loop {
-            if !trigger_clone.load(Ordering::SeqCst) {
-                embassy_time::Timer::after_millis(500).await;
-                continue;
-            }
-            set_led(ws2812.clone(), 100, 30, 255);
-
-            // Use fast current reading for filament detection
-            let is_filament_inserted = {
-                let mut locked_veml = veml.lock().unwrap();
-                match locked_veml.read_lux() {
-                    Ok(reading) => {
-                        let current_reading = reading as f32;
-                        current_reading / dark_baseline_reading <= saved_algorithm.threshold
-                    },
-                    Err(_) => false,
-                }
-            };
-
-            if !is_filament_inserted {
-                embassy_time::Timer::after_millis(300).await;
-                continue;
-            }
-            embassy_time::Timer::after_millis(50).await;
-
-            let reading = routes::read_averaged_data_with_buffer(
-                veml.clone(),
-                veml_rgb.clone(),
-                dark_baseline_reading,
-                baseline_reading,
-                rgb_baseline,
-                dark_rgb_baseline,
-                wifi_status.clone(),
-                led_light.clone(),
-                ws2812.clone(),
-                saved_algorithm,
-                lux_buffer.clone(),
-                rgb_buffers.clone(),
-                rgb_multipliers.clone(),
-            )
-            .await;
-            
-            set_led(ws2812.clone(), 255, 30, 255);
-            let reading_string = reading.unwrap();
-            let reading_parts: Vec<&str> = reading_string.split(',').collect();
-            let reading_float = reading_parts[0].parse::<f32>().unwrap();
-            let message = format!(
-                "{},,,,{:.1},000000\n",
-                generate_random_11_digit_number(),
-                reading_float
-            );
-            send.send(message).await;
-
-            embassy_time::Timer::after_millis(300).await;
-            loop {
-                embassy_time::Timer::after_millis(50).await; // Much faster polling for filament removal
-
-                // Use fast current reading for filament removal detection
-                let is_filament_inserted = {
-                    let mut locked_veml = veml.lock().unwrap();
-                    match locked_veml.read_lux() {
-                        Ok(reading) => {
-                            let current_reading = reading as f32;
-                            current_reading / dark_baseline_reading <= saved_algorithm.threshold
-                        },
-                        Err(_) => false,
-                    }
-                };
-
-                if !is_filament_inserted {
-                    break;
-                }
-            }
-
-            embassy_time::Timer::after_millis(100).await;
-        }
-    };
-    embassy_futures::join::join(measurement_loop, conn_loop).await;
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 pub async fn run<'a>(
     server: &mut WsServer,
@@ -591,12 +437,11 @@ pub async fn run<'a>(
 }
 
 #[derive(Debug)]
-enum WsHandlerError<C, W> {
+enum WsHandlerError<C> {
     Connection(C),
-    Ws(W),
 }
 
-impl<C, W> From<C> for WsHandlerError<C, W> {
+impl<C> From<C> for WsHandlerError<C> {
     fn from(e: C) -> Self {
         Self::Connection(e)
     }
