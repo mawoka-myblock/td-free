@@ -185,14 +185,14 @@ fn main() -> Result<(), ()> {
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
-    FreeRtos.delay_ms(200);
+    FreeRtos.delay_ms(500);
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
 
     // White balance calibration at 50% LED brightness
     let rgb_white_balance: (u16, u16, u16) = take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
 
     led_light.lock().unwrap().set_duty(25).unwrap();
-    FreeRtos.delay_ms(200);
+    FreeRtos.delay_ms(500);
     let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
 
     // For compatibility, we'll use the white balance as both baseline values
@@ -204,14 +204,32 @@ fn main() -> Result<(), ()> {
     // Wrap wifi in Arc<Mutex<...>> to match wifi_setup signature
     let wifi = Arc::new(Mutex::new(wifi));
 
-    let _hotspot_ip = block_on(wifi::wifi_setup(
+    // --- CHANGED: handle new wifi_setup return type and spawn maintainer if connected ---
+    let (wifi_mode, _hotspot_ip, creds) = block_on(wifi::wifi_setup(
         wifi.clone(),
         nvs.clone(),
         ws2812.clone(),
         wifi_status.clone(),
     ))
-    .unwrap()
-    .1;
+    .unwrap();
+
+    if let (wifi::WifiEnum::Connected, Some((ssid, password))) = (wifi_mode, creds) {
+        // You must spawn the maintainer from an async context.
+        // If you use block_on here, you cannot spawn an async task.
+        // If you switch to an async main, you can do:
+        // tokio::spawn(wifi::wifi_connection_maintainer(
+        //     wifi.clone(),
+        //     ssid,
+        //     password,
+        //     ws2812.clone(),
+        //     wifi_status.clone(),
+        // ));
+        //
+        // For now, just log a warning:
+        log::warn!("WiFi maintainer task not started: must be spawned from an async context!");
+    }
+    // --- END CHANGED ---
+
     log::info!("WiFi Started");
 
     let arced_nvs = Arc::new(nvs.clone());
@@ -420,11 +438,11 @@ pub async fn run<'a>(
         saved_algorithm,
         saved_rgb_multipliers: Arc::new(Mutex::new(saved_rgb_multipliers)),
         // Use smaller buffers to reduce memory usage
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(50))),
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
         rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(50),
-            median_buffer::RunningMedianBufferU16::new(50),
-            median_buffer::RunningMedianBufferU16::new(50),
+            median_buffer::RunningMedianBufferU16::new(100),
+            median_buffer::RunningMedianBufferU16::new(100),
+            median_buffer::RunningMedianBufferU16::new(100),
         ))),
     };
 

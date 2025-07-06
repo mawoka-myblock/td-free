@@ -468,8 +468,8 @@
         }
 
         function updateConfidence(sampleCount) {
-            const maxSamples = 50; // Match the buffer size
-            const percentage = Math.min(50, (sampleCount / maxSamples) * 50);
+            const maxSamples = 100; // Match the buffer size
+            const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
 
             document.getElementById('confidence-text').textContent = `${percentage.toFixed(0)}%`;
             document.getElementById('confidence-fill').style.width = `${percentage}%`;

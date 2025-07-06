@@ -52,7 +52,7 @@ pub async fn wifi_connection_maintainer(
             // Only lock for the duration of the call, never across .await
             {
                 let mut wifi_guard = wifi.lock().unwrap();
-                let _ = futures::executor::block_on(wifi_guard.stop());
+                let _ = wifi_guard.stop().await;
             }
             embassy_time::Timer::after_millis(1000).await;
             {
@@ -277,7 +277,7 @@ pub async fn wifi_setup(
     nvs: EspNvsPartition<NvsDefault>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     wifi_status: Arc<Mutex<WifiEnum>>,
-) -> anyhow::Result<(WifiEnum, Option<Ipv4Addr>)> {
+) -> anyhow::Result<(WifiEnum, Option<Ipv4Addr>, Option<(String, String)>)> {
     // Set status to working while attempting connection
     {
         let mut w_status = wifi_status.lock().unwrap();
@@ -294,7 +294,7 @@ pub async fn wifi_setup(
             set_led(ws2812, 255, 0, 255);
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
-            return Ok((WifiEnum::HotSpot, Some(ip)));
+            return Ok((WifiEnum::HotSpot, Some(ip), None));
         }
     };
 
@@ -310,7 +310,7 @@ pub async fn wifi_setup(
         set_led(ws2812, 255, 0, 255);
         let mut w_status = wifi_status.lock().unwrap();
         *w_status = WifiEnum::HotSpot;
-        return Ok((WifiEnum::HotSpot, Some(ip)));
+        return Ok((WifiEnum::HotSpot, Some(ip), None));
     }
 
     let ssid = wifi_ssid.unwrap();
@@ -330,21 +330,8 @@ pub async fn wifi_setup(
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::Connected;
 
-            // Start background connection maintainer
-            let wifi_arc = wifi.clone();
-            let ws2812_arc = ws2812.clone();
-            let wifi_status_arc = wifi_status.clone();
-            let ssid_str = ssid.to_string();
-            let password_str = password.to_string();
-            spawn_wifi_maintainer(
-                wifi_arc,
-                ssid_str,
-                password_str,
-                ws2812_arc,
-                wifi_status_arc,
-            );
-
-            Ok((WifiEnum::Connected, None))
+            // Return credentials so caller can spawn maintainer task
+            Ok((WifiEnum::Connected, None, Some((ssid.to_string(), password.to_string()))))
         }
         Err(e) => {
             error!("WiFi client connection failed after all attempts: {:?}", e);
@@ -362,7 +349,7 @@ pub async fn wifi_setup(
             set_led(ws2812, 255, 0, 255); // Magenta for hotspot
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
-            Ok((WifiEnum::HotSpot, Some(ip)))
+            Ok((WifiEnum::HotSpot, Some(ip), None))
         }
     }
 }
@@ -436,22 +423,3 @@ async fn wifi_hotspot(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<
     }
 }
 
-/// Spawns the WiFi connection maintainer in the background.
-fn spawn_wifi_maintainer(
-    wifi: Arc<Mutex<AsyncWifi<EspWifi<'static>>>>,
-    ssid: String,
-    password: String,
-    ws2812: Arc<Mutex<LedType<'_>>>,
-    wifi_status: Arc<Mutex<WifiEnum>>,
-) {
-    // Use a detached thread to avoid Send issues with async_std
-    std::thread::spawn(move || {
-        futures::executor::block_on(wifi_connection_maintainer(
-            wifi,
-            ssid,
-            password,
-            ws2812,
-            wifi_status,
-        ));
-    });
-}

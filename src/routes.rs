@@ -16,9 +16,11 @@ use esp_idf_svc::{
     http::{client::EspHttpConnection, Method},
     io::Write as _,
 };
-use log::error;
+use log::{error, info};
 use url::Url;
 use veml7700::Veml7700;
+
+use once_cell::sync::Lazy;
 
 use crate::{
     helpers::{self, read_spoolman_data, NvsData, HardwareI2cInstance, SimpleBitBangI2cInstance, RGBMultipliers},
@@ -585,25 +587,19 @@ impl WsHandler<'_> {
 
         log::info!("Calibrating to target color: RGB({}, {}, {})", target_r, target_g, target_b);
 
-        // Get the current TD value for this material
-        let current_td = {
-            let mut locked_veml = self.veml.lock().unwrap();
-            match locked_veml.read_lux() {
-                Ok(reading) => {
-                    let current_reading = reading as f32;
-                    let td_value = (current_reading / self.baseline_reading) * 10.0;
-                    self.saved_algorithm.m * td_value + self.saved_algorithm.b
-                },
-                Err(_) => {
-                    conn.initiate_response(400, None, &[("Content-Type", "application/json")])
-                        .await?;
-                    conn.write_all(br#"{"status": "error", "message": "Cannot read sensor for TD calculation"}"#).await?;
-                    return Ok(());
-                }
+        // Get the current median lux for this material using the buffer median
+        let current_lux = {
+            let buffer = self.lux_buffer.lock().unwrap();
+            let median = buffer.median();
+            if let Some(current_reading) = median {
+                current_reading
+            } else {
+                conn.initiate_response(400, None, &[("Content-Type", "application/json")])
+                    .await?;
+                conn.write_all(br#"{"status": "error", "message": "No valid lux buffer for normalization"}"#).await?;
+                return Ok(());
             }
         };
-
-        log::info!("Current TD value for calibration: {:.2}", current_td);
 
         // Take current RAW median reading from the buffers
         let (current_r, current_g, current_b) = {
@@ -614,6 +610,8 @@ impl WsHandler<'_> {
                 buffers.2.median().unwrap_or(0),
             )
         };
+
+
 
         if current_r == 0 && current_g == 0 && current_b == 0 {
             conn.initiate_response(400, None, &[("Content-Type", "application/json")])
@@ -630,6 +628,9 @@ impl WsHandler<'_> {
             *multipliers
         };
 
+        //set the current multiplier td to lux. TODO: Rename this field
+        current_multipliers.td_reference = current_lux;
+
         log::info!("Starting optimization from current multipliers: R={:.3}, G={:.3}, B={:.3}, Brightness={:.3}",
                   current_multipliers.red, current_multipliers.green, current_multipliers.blue, current_multipliers.brightness);
 
@@ -638,9 +639,9 @@ impl WsHandler<'_> {
             (current_r, current_g, current_b),
             (target_r, target_g, target_b),
             self.rgb_baseline,
-            current_td,
+            current_lux,
             current_multipliers,
-            50 // max iterations for brightness
+            100
         );
 
         current_multipliers.brightness = optimized_brightness;
@@ -650,9 +651,9 @@ impl WsHandler<'_> {
             (current_r, current_g, current_b),
             (target_r, target_g, target_b),
             self.rgb_baseline,
-            current_td,
+            current_lux,
             current_multipliers,
-            30 // max iterations per channel
+            100
         );
 
         current_multipliers.red = optimized_red;
@@ -668,27 +669,27 @@ impl WsHandler<'_> {
             (current_r, current_g, current_b).1,
             (current_r, current_g, current_b).2,
             self.rgb_baseline,
-            current_td,
+            current_lux,
             &current_multipliers
         );
 
         log::info!("Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
                   target_r, target_g, target_b, verify_result.0, verify_result.1, verify_result.2);
 
-        // Set the current TD as the new reference TD for this calibration
+        // Set the multipliers with the optimized values
         let new_multipliers = RGBMultipliers {
             red: optimized_red,
             green: optimized_green,
             blue: optimized_blue,
             brightness: optimized_brightness,
-            td_reference: current_td, // Set current TD as the new reference
+            td_reference: current_lux, // Not used for normalization anymore, but keep for compatibility
             reference_r: target_r,
             reference_g: target_g,
             reference_b: target_b,
         };
 
         log::info!("Setting new TD reference: {:.2} (was {:.2})", 
-                  current_td, current_multipliers.td_reference);
+                  current_lux, current_multipliers.td_reference);
 
         // Update the in-memory multipliers
         {
@@ -701,7 +702,7 @@ impl WsHandler<'_> {
             Ok(_) => {
                 let response = format!(
                     r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    optimized_red, optimized_green, optimized_blue, optimized_brightness, current_td
+                    optimized_red, optimized_green, optimized_blue, optimized_brightness, current_lux
                 );
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -717,17 +718,6 @@ impl WsHandler<'_> {
 
         Ok(())
     }
-
-    // Keep the old method name for backwards compatibility
-    pub async fn auto_calibrate_white_reference<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        self.auto_calibrate_gray_reference(conn).await
-    }
 }
 
 impl WsHandler<'_> {
@@ -738,29 +728,43 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let data = read_data_with_buffer(
-            self.veml.clone(),
-            self.veml_rgb.clone(),
-            self.dark_baseline_reading,
-            self.baseline_reading,
-            self.rgb_baseline,
-            self.dark_rgb_baseline,
-            self.wifi_status.clone(),
-            self.led_light.clone(),
-            self.ws2812b.clone(),
-            self.saved_algorithm,
-            self.lux_buffer.clone(),
-            self.rgb_buffers.clone(),
-            self.saved_rgb_multipliers.clone(),
-        )
-        .await
-        .unwrap_or_default();
+        // Try to acquire the BUSY lock without blocking
+        let lock = BUSY.try_lock();
+        let data = if let Ok(_guard) = lock {
+            // We got the lock, run the function and update LAST_DATA
+            let result = read_data_with_buffer(
+                self.veml.clone(),
+                self.veml_rgb.clone(),
+                self.dark_baseline_reading,
+                self.baseline_reading,
+                self.rgb_baseline,
+                self.dark_rgb_baseline,
+                self.wifi_status.clone(),
+                self.led_light.clone(),
+                self.ws2812b.clone(),
+                self.saved_algorithm,
+                self.lux_buffer.clone(),
+                self.rgb_buffers.clone(),
+                self.saved_rgb_multipliers.clone(),
+            )
+            .await
+            .unwrap_or_default();
+            {
+                let mut last = LAST_DATA.lock().unwrap();
+                *last = Some(result.clone());
+            }
+            result
+        } else {
+            // Already running, serve the last result if available
+            let last = LAST_DATA.lock().unwrap();
+            last.clone().unwrap_or_else(|| "".to_string())
+        };
+
         conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
             .await?;
         conn.write_all(data.as_ref()).await?;
         Ok(())
     }
-    
 }
 
 impl Handler for WsHandler<'_> {
@@ -864,7 +868,7 @@ fn apply_complete_color_correction(
     raw_g: u16,
     raw_b: u16,
     white_balance: (u16, u16, u16),
-    current_td: f32,
+    current_lux: f32,
     multipliers: &RGBMultipliers
 ) -> (u8, u8, u8) {
     // Step 1: Apply spectral response correction
@@ -873,53 +877,47 @@ fn apply_complete_color_correction(
         white_balance.0, white_balance.1, white_balance.2
     );
 
-    // Step 2: Apply RGB multipliers with TD-based brightness
-    apply_rgb_multipliers(corrected_r, corrected_g, corrected_b, current_td, multipliers)
+    // Step 2: Apply RGB multipliers with lux-based brightness normalization
+    apply_rgb_multipliers(corrected_r, corrected_g, corrected_b, current_lux, multipliers)
 }
 
 
 
-fn apply_rgb_multipliers(r: u8, g: u8, b: u8, current_td: f32, multipliers: &RGBMultipliers) -> (u8, u8, u8) {
-    // Fitted brightness function: brightness(td) = a / (td + b)
-    fn brightness(td: f32) -> f32 {
-        let a = 4.00;
-        let b = -0.900;
-        a / (td + b)
-    }
+fn apply_rgb_multipliers(
+    r: u8,
+    g: u8,
+    b: u8,
+    current_lux: f32,
+    multipliers: &RGBMultipliers
+) -> (u8, u8, u8) {
+    // Avoid division by zero
+    let safe_current_lux = current_lux.max(1.0);
 
-    let safe_current_td = current_td.max(0.1);
-    let safe_ref_td = multipliers.td_reference.max(0.1);
+    // Calculate normalization factor to reach target lux
+    let normalization_factor = (safe_current_lux / multipliers.td_reference).clamp(0.01, 10.0);
 
-    log::info!(
-        "Applying RGB multipliers: R={}, G={}, B={}, current_td={:.2}, ref_td={:.2}",
-        r, g, b, current_td, multipliers.td_reference
-    );
+    //hardcoded multipliers that work as a good baseline
+    let r_baseline = 0.85;
+    let g_baseline = 0.93;
+    let b_baseline = 1.26;
+    let brightness_baseline = 1.15;
 
-    let current_brightness = brightness(safe_current_td);
-    let reference_brightness = brightness(safe_ref_td);
-
-    let auto_brightness_factor = (current_brightness / reference_brightness).clamp(0.01, 100.0);
-
-    log::info!(
-        "TD-based brightness: current_td={:.2}, ref_td={:.2}, auto_factor={:.3}",
-        current_td, multipliers.td_reference, auto_brightness_factor
-    );
 
     // Apply color multipliers
-    let r_color_corrected = r as f32 * multipliers.red;
-    let g_color_corrected = g as f32 * multipliers.green;
-    let b_color_corrected = b as f32 * multipliers.blue;
+    let r_color_corrected = r as f32 * multipliers.red * r_baseline;
+    let g_color_corrected = g as f32 * multipliers.green * g_baseline;
+    let b_color_corrected = b as f32 * multipliers.blue * b_baseline;
 
-    // Final brightness factor
-    let total_brightness = multipliers.brightness * auto_brightness_factor;
+    // Apply total brightness (user brightness * normalization)
+    let total_brightness = multipliers.brightness * normalization_factor * brightness_baseline;
 
     let r_final = (r_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
     let g_final = (g_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
     let b_final = (b_color_corrected * total_brightness).round().clamp(0.0, 255.0) as u8;
 
     log::info!(
-        "TD-brightness correction: ({},{},{}) * Color({:.2},{:.2},{:.2}) * Total_Brightness({:.2}) = ({},{},{})",
-        r, g, b, multipliers.red, multipliers.green, multipliers.blue, total_brightness,
+        "Lux-normalized correction: ({},{},{}) * Color({:.2},{:.2},{:.2}) * Brightness({:.2}) * Norm({:.2}) = ({},{},{})",
+        r, g, b, multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, normalization_factor,
         r_final, g_final, b_final
     );
 
@@ -939,7 +937,7 @@ fn optimize_brightness(
     raw_color: (u16, u16, u16),
     target_color: (u8, u8, u8),
     white_balance: (u16, u16, u16),
-    current_td: f32,
+    current_lux: f32,
     mut multipliers: RGBMultipliers,
     max_iterations: usize
 ) -> f32 {
@@ -950,7 +948,7 @@ fn optimize_brightness(
     let current_result = apply_complete_color_correction(
         raw_color.0, raw_color.1, raw_color.2,
         white_balance,
-        current_td,
+        current_lux,
         &multipliers
     );
     let mut current_distance = calculate_rgb_distance(current_result, target_color);
@@ -959,7 +957,7 @@ fn optimize_brightness(
     log::info!("Brightness optimization start: brightness={:.3}, distance={:.2}",
               multipliers.brightness, current_distance);
 
-    let step_size = 0.05; // 5% steps
+    let step_size = 0.02; // 5% steps
     let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
 
     for iteration in 0..max_iterations {
@@ -977,7 +975,7 @@ fn optimize_brightness(
             let test_result = apply_complete_color_correction(
                 raw_color.0, raw_color.1, raw_color.2,
                 white_balance,
-                current_td,
+                current_lux,
                 &test_multipliers
             );
 
@@ -1015,11 +1013,11 @@ fn optimize_rgb_channels(
     raw_color: (u16, u16, u16),
     target_color: (u8, u8, u8),
     white_balance: (u16, u16, u16),
-    current_td: f32,
+    current_lux: f32,
     mut multipliers: RGBMultipliers,
     max_iterations: usize
 ) -> (f32, f32, f32) {
-    let step_size = 0.02; // 2% steps for fine-tuning
+    let step_size = 0.01; // 2% steps for fine-tuning
 
     // Optimize each channel independently
     let channels = ["red", "green", "blue"];
@@ -1046,7 +1044,7 @@ fn optimize_rgb_channels(
         let initial_result = apply_complete_color_correction(
             raw_color.0, raw_color.1, raw_color.2,
             white_balance,
-            current_td,
+            current_lux,
             &multipliers
         );
 
@@ -1082,7 +1080,7 @@ fn optimize_rgb_channels(
                 let test_result = apply_complete_color_correction(
                     raw_color.0, raw_color.1, raw_color.2,
                     white_balance,
-                    current_td,
+                    current_lux,
                     &test_multipliers
                 );
 
@@ -1143,24 +1141,32 @@ async fn read_data_with_buffer(
     rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
 
-    // Take quick readings for robust filament detection using median
-    let mut detection_readings: Vec<f32> = Vec::with_capacity(5);
+    // We need to be under 1 seconds for this function.
 
-    //print current led brightness
-    log::info!("Current LED brightness: {:?}", led_light.lock().unwrap().get_duty());
-    
-    // if not already fully on, set LED to fully on
-    if led_light.lock().unwrap().get_duty() != 256 {
+    // Take quick readings for robust filament detection using median
+    let mut detection_readings: Vec<f32> = Vec::with_capacity(3);
+
+    // Only lock once and drop before reacquiring
+    let current_led_brightness = {
+        let led = led_light.lock().unwrap();
+        led.get_duty()
+    };
+    log::info!("Current LED brightness: {:?}", current_led_brightness);
+
+    // Only lock again if needed, and drop immediately after
+    if current_led_brightness != 25 {
         log::info!("Setting LED to fully on for filament detection");
-        let mut led = led_light.lock().unwrap();
-        if let Err(e) = led.set_duty_cycle_fully_on() {
-            log::error!("Failed to set LED duty cycle: {:?}", e);
-            return None;
+        {
+            let mut led = led_light.lock().unwrap();
+            if let Err(e) = led.set_duty(25) {
+                log::error!("Failed to set LED duty cycle: {:?}", e);
+                return None;
+            }
         }
-        embassy_time::Timer::after_millis(300).await;
+        embassy_time::Timer::after_millis(350).await;
     }
 
-    for i in 0..5 {
+    for i in 0..3 {
         let current_reading = {
             let mut locked_veml = veml.lock().unwrap();
             match locked_veml.read_lux() {
@@ -1177,24 +1183,13 @@ async fn read_data_with_buffer(
 
         };
         detection_readings.push(current_reading);
-        //let mut buffer = lux_buffer.lock().unwrap();
-        //buffer.push(current_reading);
-        //
-        // let mut locked_rgb = veml_rgb.lock().unwrap();
-        // if let (Ok(r), Ok(g), Ok(b)) = (locked_rgb.read_red(), locked_rgb.read_green(), locked_rgb.read_blue()) {
-        //     log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
-        //
-        //     let mut buffers = rgb_buffers.lock().unwrap();
-        //     buffers.0.push(r);
-        //     buffers.1.push(g);
-        //     buffers.2.push(b);
-        // }
-        // drop(locked_rgb); // Release lock
+
         
-        if i < 4 {
+        if i < 2 {
             embassy_time::Timer::after_millis(100).await;
         }
     }
+    // worst case time = 300 + 2 * 100 = 500ms
 
     // Calculate median of the 3 readings for filament detection
     detection_readings.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -1205,16 +1200,16 @@ async fn read_data_with_buffer(
     let variance = detection_readings.iter().map(|x| (x - mean).powi(2)).sum::<f32>() / 3.0;
     let std_dev = variance.sqrt();
 
-    log::info!("Filament detection readings: [{:.2}, {:.2}, {:.2},{:.2},{:.2}] -> median: {:.2}, std_dev: {:.3}",
-              detection_readings[0], detection_readings[1], detection_readings[2], detection_readings[3], detection_readings[4], median_reading, std_dev);
+    log::info!("Filament detection readings: [{:.2}, {:.2}, {:.2}] -> median: {:.2}, std_dev: {:.3}",
+              detection_readings[0], detection_readings[1], detection_readings[2], median_reading, std_dev);
     
     // Warn if readings are too similar (might indicate sensor issue)
     if std_dev < 0.1 && median_reading > 10.0 {
         log::warn!("VEML7700 readings very similar (std_dev: {:.3}) - sensor might need more time", std_dev);
     }
 
-    let brightness_diff = baseline_reading - dark_baseline_reading;
-    let current_threshold = baseline_reading - (1.0 - saved_algorithm.threshold) * brightness_diff;
+    let brightness_diff = dark_baseline_reading;
+    let current_threshold = dark_baseline_reading - (1.0 - saved_algorithm.threshold) * brightness_diff;
     log::info!("Detection threshold check: {:.2} (threshold: {:.2})",
               median_reading, current_threshold);
 
@@ -1244,6 +1239,7 @@ async fn read_data_with_buffer(
     // Filament is detected
     log::info!("Filament detected!");
     set_led(ws2812.clone(), 0, 125, 125);
+
     {
         let mut led = led_light.lock().unwrap();
         if let Err(e) = led.set_duty_cycle_fully_on() {
@@ -1253,17 +1249,23 @@ async fn read_data_with_buffer(
     }
 
     // Wait for LED to stabilize before taking measurements
-    embassy_time::Timer::after_millis(100).await;
+    embassy_time::Timer::after_millis(350).await;
+
+    // worst case time = 500 + 300 = 800ms
 
     // Take multiple readings for median calculation with longer delays
-    let readings_per_call = 4;
+    let readings_per_call = 3;
     for i in 0..readings_per_call {
         // Longer delay to ensure fresh VEML7700 readings
-        embassy_time::Timer::after_millis(100).await; // Increased from 15ms to 60ms
+        if i > 0 {
+            embassy_time::Timer::after_millis(100).await; // Increased from 15ms to 60ms
+        }
 
         {
+            let mut locked_veml = veml.lock().unwrap();
             let mut buffer = lux_buffer.lock().unwrap();
-            buffer.push(median_reading);
+            let lux_reading = locked_veml.read_lux().unwrap_or(0.0) as f32;
+            buffer.push(lux_reading);
         }
 
         let mut locked_rgb = veml_rgb.lock().unwrap();
@@ -1277,6 +1279,8 @@ async fn read_data_with_buffer(
         }
         drop(locked_rgb); // Release lock
     }
+
+    // worst case time = 800 + 2 * 100 = 1000ms
 
     // Get buffer count for confidence indicator
     let buffer_count = {
@@ -1303,6 +1307,9 @@ async fn read_data_with_buffer(
     let td_value = (final_median_lux / baseline_reading) * 10.0;
     let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
+    log::info!("Final TD value: {:.2} (raw lux: {:.2}, baseline: {:.2}, m: {:.3}, b: {:.3})",
+               adjusted_td_value, final_median_lux, baseline_reading, saved_algorithm.m, saved_algorithm.b);
+
     // Read clear channel for brightness correction (RAW)
     let clear_median_raw = {
         let mut locked_rgb = veml_rgb.lock().unwrap();
@@ -1321,23 +1328,16 @@ async fn read_data_with_buffer(
 
     log::info!("Spectral corrected RGB: ({},{},{})", r_corrected, g_corrected, b_corrected);
 
-    // Step 2: Apply user RGB multipliers with TD-based brightness adjustment to corrected values
+    // Step 2: Apply user RGB multipliers with lux-based brightness adjustment to corrected values
     let (r_final, g_final, b_final) = {
         let multipliers = rgb_multipliers.lock().unwrap();
-        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, adjusted_td_value, &*multipliers)
+        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, final_median_lux, &*multipliers)
     };
 
     // Create hex color string with corrected values
     let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
 
     let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
-
-    // {
-    //     let mut led = led_light.lock().unwrap();
-    //     if let Err(e) = led.set_duty(25) {
-    //         log::error!("Failed to adjust LED duty: {:?}", e);
-    //     }
-    // }
 
     // Log buffer status and detailed color information
     let (lux_len, rgb_len) = {
@@ -1355,3 +1355,6 @@ async fn read_data_with_buffer(
     Some(ws_message)
 }
 
+// Static for concurrency control and caching last result
+static BUSY: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static LAST_DATA: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
