@@ -214,18 +214,6 @@ fn main() -> Result<(), ()> {
     .unwrap();
 
     if let (wifi::WifiEnum::Connected, Some((ssid, password))) = (wifi_mode, creds) {
-        // You must spawn the maintainer from an async context.
-        // If you use block_on here, you cannot spawn an async task.
-        // If you switch to an async main, you can do:
-        // tokio::spawn(wifi::wifi_connection_maintainer(
-        //     wifi.clone(),
-        //     ssid,
-        //     password,
-        //     ws2812.clone(),
-        //     wifi_status.clone(),
-        // ));
-        //
-        // For now, just log a warning:
         log::warn!("WiFi maintainer task not started: must be spawned from an async context!");
     }
     // --- END CHANGED ---
