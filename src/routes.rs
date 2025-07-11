@@ -1204,7 +1204,7 @@ async fn read_data_with_buffer(
               detection_readings[0], detection_readings[1], detection_readings[2], median_reading, std_dev);
     
     // Warn if readings are too similar (might indicate sensor issue)
-    if std_dev < 0.1 && median_reading > 10.0 {
+    if std_dev < 0.01 && median_reading > 10.0 {
         log::warn!("VEML7700 readings very similar (std_dev: {:.3}) - sensor might need more time", std_dev);
     }
 
