@@ -1,31 +1,24 @@
 #![feature(iter_intersperse)]
 #![feature(let_chains)]
 
-use core::fmt::{Debug, Display};
 use crate::helpers::NvsData;
 use crate::helpers::RGBMultipliers;
+use core::fmt::Debug;
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::str;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
-use edge_http::io::server::Connection;
-use edge_http::io::server::{Handler, Server, DEFAULT_BUF_SIZE};
+use edge_http::io::server::Server;
 use edge_http::io::Error as EdgeError;
-use edge_http::Method as EdgeMethod;
 use edge_nal::TcpBind;
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::Channel;
 
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
 
-use embedded_io_async::{Read, Write};
-
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
-use esp_idf_svc::hal::task::block_on;
 use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
 use esp_idf_svc::io::Write as ioWrite;
 use esp_idf_svc::ipv4::{
@@ -41,8 +34,7 @@ use esp_idf_svc::{
     hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::{generate_random_11_digit_number, Pins, initialize_veml, HardwareI2cInstance, SimpleBitBangI2cInstance};
-use led::set_led;
+use helpers::{initialize_veml, HardwareI2cInstance, Pins, SimpleBitBangI2cInstance};
 use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
@@ -126,8 +118,16 @@ fn main() -> Result<(), ()> {
     > = Arc::new(Mutex::new(
         LedType::new(peripherals.rmt.channel1, peripherals.pins.gpio4).unwrap(),
     ));
-    ws2812_old.lock().unwrap().write_nocopy(std::iter::repeat(RGB8::new(255, 255, 0)).take(1)).unwrap();
-    ws2812_new.lock().unwrap().write_nocopy(std::iter::repeat(RGB8::new(255, 255, 0)).take(1)).unwrap();
+    ws2812_old
+        .lock()
+        .unwrap()
+        .write_nocopy(std::iter::repeat_n(RGB8::new(255, 255, 0), 1))
+        .unwrap();
+    ws2812_new
+        .lock()
+        .unwrap()
+        .write_nocopy(std::iter::repeat_n(RGB8::new(255, 255, 0), 1))
+        .unwrap();
     let (veml, veml_rgb, is_old_pcb) = initialize_veml(
         Pins {
             i2c: peripherals.i2c0,
@@ -182,7 +182,7 @@ fn main() -> Result<(), ()> {
         .unwrap(),
     )
     .unwrap();
-    let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
+    let wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
     let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
     let wifi = Arc::new(Mutex::new(wifi));
@@ -210,7 +210,8 @@ fn main() -> Result<(), ()> {
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
 
     // White balance calibration at 50% LED brightness
-    let rgb_white_balance: (u16, u16, u16) = take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
+    let rgb_white_balance: (u16, u16, u16) =
+        take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
 
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(500);
@@ -221,15 +222,12 @@ fn main() -> Result<(), ()> {
 
     log::info!("Baseline readings completed with white balance calibration");
 
-
-
-
     let arced_nvs = Arc::new(nvs.clone());
 
     let mut server = unsafe { Box::new_uninit().assume_init() };
 
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
-    
+
     // Try to load algorithm variables with error recovery
     let saved_algorithm = match std::panic::catch_unwind(|| {
         helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone())
@@ -244,21 +242,25 @@ fn main() -> Result<(), ()> {
             }
         }
     };
-    
+
     // Try to load RGB multipliers with error recovery and wrap in Arc<Mutex<>>
-    let saved_rgb_multipliers = Arc::new(Mutex::new(match std::panic::catch_unwind(|| {
-        helpers::get_saved_rgb_multipliers(arced_nvs.as_ref().clone())
-    }) {
-        Ok(multipliers) => multipliers,
-        Err(_) => {
-            log::error!("RGB multipliers loading caused panic - clearing NVS and using defaults");
-            // Clear the corrupted data
-            if let Err(e) = helpers::clear_rgb_multipliers_nvs(arced_nvs.as_ref().clone()) {
-                log::error!("Failed to clear RGB multipliers NVS: {:?}", e);
+    let saved_rgb_multipliers = Arc::new(Mutex::new(
+        match std::panic::catch_unwind(|| {
+            helpers::get_saved_rgb_multipliers(arced_nvs.as_ref().clone())
+        }) {
+            Ok(multipliers) => multipliers,
+            Err(_) => {
+                log::error!(
+                    "RGB multipliers loading caused panic - clearing NVS and using defaults"
+                );
+                // Clear the corrupted data
+                if let Err(e) = helpers::clear_rgb_multipliers_nvs(arced_nvs.as_ref().clone()) {
+                    log::error!("Failed to clear RGB multipliers NVS: {:?}", e);
+                }
+                helpers::RGBMultipliers::default()
             }
-            helpers::RGBMultipliers::default()
-        }
-    }));
+        },
+    ));
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
@@ -268,7 +270,7 @@ fn main() -> Result<(), ()> {
         veml_rgb.clone(),
         dark_baseline_reading,
         baseline_reading,
-        rgb_white_balance,  // Use white balance instead of rgb_baseline
+        rgb_white_balance, // Use white balance instead of rgb_baseline
         dark_rgb_baseline,
         wifi_status.clone(),
         led_light.clone(),
@@ -276,7 +278,7 @@ fn main() -> Result<(), ()> {
         &stack,
         ws2812.clone(),
         saved_algorithm,
-        saved_rgb_multipliers.lock().unwrap().clone(),
+        *saved_rgb_multipliers.lock().unwrap(),
     );
 
     // --- Serial connection setup ---
@@ -285,28 +287,27 @@ fn main() -> Result<(), ()> {
         peripherals.pins.gpio18,
         peripherals.pins.gpio19,
         &UsbSerialConfig::new(),
-    ).unwrap();
+    )
+    .unwrap();
     let mut exit_buffer = [0u8; 1];
     serial_driver.read(&mut exit_buffer, 500).unwrap();
     let serial_future = {
         async move {
-            if exit_buffer.iter().any(|&x| x == b'e') {
+            if exit_buffer.contains(&b'e') {
                 drop(serial_driver);
                 log::info!("Logging reactivated!");
                 std::future::pending::<Result<(), anyhow::Error>>().await
             } else {
                 //log::warn!("Logging deactivated from now on, this is last log message!");
                 //logger.set_target_level("*", log::LevelFilter::Off).unwrap();
-                serial_connection(
-                    &mut serial_driver,
-                ).await
+                serial_connection(&mut serial_driver).await
             }
         }
     };
 
     // --- Run both server and serial connection ---
     esp_idf_svc::hal::task::block_on(async {
-        futures::future::join(server_future, serial_future).await;
+        let _ = futures::future::join(server_future, serial_future).await;
     });
 
     Ok(())
@@ -314,15 +315,18 @@ fn main() -> Result<(), ()> {
 
 fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
-    led_light: Arc<Mutex<LedcDriver<'_>>>
+    led_light: Arc<Mutex<LedcDriver<'_>>>,
 ) -> (u16, u16, u16) {
     let sample_count = 10; // Increased samples for better accuracy
     let sample_delay = 55u32;
 
-    log::info!("Starting comprehensive RGB white balance calibration with {} samples", sample_count);
+    log::info!(
+        "Starting comprehensive RGB white balance calibration with {} samples",
+        sample_count
+    );
 
     // Take calibration readings at multiple brightness levels to account for non-linearity
-    let brightness_levels = [25,50,75]; // Different LED brightness levels
+    let brightness_levels = [25, 50, 75]; // Different LED brightness levels
     let mut all_r_readings: Vec<u16> = Vec::new();
     let mut all_g_readings: Vec<u16> = Vec::new();
     let mut all_b_readings: Vec<u16> = Vec::new();
@@ -346,17 +350,35 @@ fn take_rgb_white_balance_calibration(
 
         for i in 0..sample_count {
             let mut locked_veml = veml_rgb.lock().unwrap();
-            match (locked_veml.read_red(), locked_veml.read_green(), locked_veml.read_blue(), locked_veml.read_clear()) {
+            match (
+                locked_veml.read_red(),
+                locked_veml.read_green(),
+                locked_veml.read_blue(),
+                locked_veml.read_clear(),
+            ) {
                 (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
-                    log::debug!("Brightness {}% sample {}: R={}, G={}, B={}, Clear={}", brightness, i, r, g, b, clear);
+                    log::debug!(
+                        "Brightness {}% sample {}: R={}, G={}, B={}, Clear={}",
+                        brightness,
+                        i,
+                        r,
+                        g,
+                        b,
+                        clear
+                    );
                     r_readings.push(r);
                     g_readings.push(g);
                     b_readings.push(b);
                     clear_readings.push(clear);
-                },
+                }
                 (r_result, g_result, b_result, clear_result) => {
-                    log::warn!("Failed to read RGB sensor - R: {:?}, G: {:?}, B: {:?}, Clear: {:?}",
-                              r_result, g_result, b_result, clear_result);
+                    log::warn!(
+                        "Failed to read RGB sensor - R: {:?}, G: {:?}, B: {:?}, Clear: {:?}",
+                        r_result,
+                        g_result,
+                        b_result,
+                        clear_result
+                    );
                     continue;
                 }
             }
@@ -402,16 +424,28 @@ fn take_rgb_white_balance_calibration(
     let led_color_temp_correction_g = 1.00;
     let led_color_temp_correction_b = 1.00;
 
-
     let corrected_r = (r_median as f32 * led_color_temp_correction_r) as u16;
     let corrected_g = (g_median as f32 * led_color_temp_correction_g) as u16;
     let corrected_b = (b_median as f32 * led_color_temp_correction_b) as u16;
 
-    log::info!("RGB white balance raw medians: R={}, G={}, B={}, Clear={}",
-              r_median, g_median, b_median, clear_median);
-    log::info!("Spectral response ratios (relative to Green): R={:.3}, B={:.3}", r_ratio, b_ratio);
-    log::info!("Color temperature corrected: R={}, G={}, B={}",
-              corrected_r, corrected_g, corrected_b);
+    log::info!(
+        "RGB white balance raw medians: R={}, G={}, B={}, Clear={}",
+        r_median,
+        g_median,
+        b_median,
+        clear_median
+    );
+    log::info!(
+        "Spectral response ratios (relative to Green): R={:.3}, B={:.3}",
+        r_ratio,
+        b_ratio
+    );
+    log::info!(
+        "Color temperature corrected: R={}, G={}, B={}",
+        corrected_r,
+        corrected_g,
+        corrected_b
+    );
 
     // Return color temperature corrected values
     (corrected_r, corrected_g, corrected_b)
@@ -437,9 +471,14 @@ pub async fn run<'a>(
     let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
 
     log::info!("Running HTTP server on {addr}");
-    log::info!("Loaded RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}",
-              saved_rgb_multipliers.red, saved_rgb_multipliers.green, saved_rgb_multipliers.blue, 
-              saved_rgb_multipliers.brightness, saved_rgb_multipliers.td_reference);
+    log::info!(
+        "Loaded RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}",
+        saved_rgb_multipliers.red,
+        saved_rgb_multipliers.green,
+        saved_rgb_multipliers.blue,
+        saved_rgb_multipliers.brightness,
+        saved_rgb_multipliers.td_reference
+    );
 
     let acceptor = stack.bind(addr).await?;
 
@@ -503,13 +542,14 @@ struct WsHandler<'a> {
     saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
     // Add median buffers
     lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
-    rgb_buffers: Arc<Mutex<(
-        median_buffer::RunningMedianBufferU16,
-        median_buffer::RunningMedianBufferU16,
-        median_buffer::RunningMedianBufferU16,
-    )>>,
+    rgb_buffers: Arc<
+        Mutex<(
+            median_buffer::RunningMedianBufferU16,
+            median_buffer::RunningMedianBufferU16,
+            median_buffer::RunningMedianBufferU16,
+        )>,
+    >,
 }
-
 
 fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
     format!(
@@ -519,7 +559,13 @@ fn serve_wifi_setup_page(current_ssid: &str, error: &str) -> String {
     )
 }
 
-fn serve_algo_setup_page(b_val: f32, m_val: f32, threshold_val: f32, spoolman_val: &str, spoolman_field_name: &str) -> String {
+fn serve_algo_setup_page(
+    b_val: f32,
+    m_val: f32,
+    threshold_val: f32,
+    spoolman_val: &str,
+    spoolman_field_name: &str,
+) -> String {
     format!(
         include_str!("settings.html"),
         b_val = b_val,
@@ -561,13 +607,14 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32
 
     // Calculate mean and std deviation
     let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
-    let std = (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
+    let std =
+        (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
 
     // Filter out outliers
     let mut filtered: Vec<f32> = readings
-    .into_iter()
-    .filter(|v| (*v - mean).abs() <= 2.0 * std)
-    .collect();
+        .into_iter()
+        .filter(|v| (*v - mean).abs() <= 2.0 * std)
+        .collect();
 
     // Calculate median from filtered data
     if filtered.is_empty() {
@@ -582,18 +629,21 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32
         filtered[filtered.len() / 2]
     };
 
-    log::info!("Baseline calculation: mean={:.2}, std={:.2}, median={:.2}", mean, std, median);
+    log::info!(
+        "Baseline calculation: mean={:.2}, std={:.2}, median={:.2}",
+        mean,
+        std,
+        median
+    );
     median
 }
 
 /// Serial connection using median buffer results
-pub async fn serial_connection(
-    conn: &mut UsbSerialDriver<'static>,
-) -> Result<(), anyhow::Error> {
-    use std::sync::atomic::AtomicBool;
-    use embassy_sync::channel::Channel;
-    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+pub async fn serial_connection(conn: &mut UsbSerialDriver<'static>) -> Result<(), anyhow::Error> {
     use crate::routes::LAST_MEASUREMENT;
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+    use embassy_sync::channel::Channel;
+    use std::sync::atomic::AtomicBool;
 
     let mut buffer = [0u8; 64];
     let trigger_measurement = Arc::new(AtomicBool::new(false));
@@ -648,20 +698,18 @@ pub async fn serial_connection(
             }
 
             let last_measurement = LAST_MEASUREMENT.lock().unwrap();
-            if let Some(measurement) = &*last_measurement {
-
-
-                if measurement.filament_inserted {
-                    let message = format!(
-                        "{},,,,{:.1},{:02X}{:02X}{:02X}\n",
-                        helpers::generate_random_11_digit_number(),
-                        measurement.td_value,
-                        measurement.r,
-                        measurement.g,
-                        measurement.b
-                    );
-                    send.send(message).await;
-                }
+            if let Some(measurement) = &*last_measurement
+                && measurement.filament_inserted
+            {
+                let message = format!(
+                    "{},,,,{:.1},{:02X}{:02X}{:02X}\n",
+                    helpers::generate_random_11_digit_number(),
+                    measurement.td_value,
+                    measurement.r,
+                    measurement.g,
+                    measurement.b
+                );
+                send.send(message).await;
             }
 
             // The frontend is responsible for polling and updating the values.

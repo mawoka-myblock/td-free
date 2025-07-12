@@ -16,7 +16,7 @@ use esp_idf_svc::{
     http::{client::EspHttpConnection, Method},
     io::Write as _,
 };
-use log::{error, info};
+use log::error;
 use url::Url;
 use veml7700::Veml7700;
 
@@ -90,7 +90,7 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let url = Url::parse(&format!("http://google.com{}", path)).unwrap();
+        let url = Url::parse(&format!("http://google.com{path}")).unwrap();
         let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         let ssid = url_params.get("ssid");
         let password = url_params.get("password");
@@ -215,14 +215,14 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        if &*self.wifi_status.lock().unwrap() != &WifiEnum::Connected {
+        if *self.wifi_status.lock().unwrap() != WifiEnum::Connected {
             conn.initiate_response(400, None, &[("Content-Type", "text/plain")])
                 .await?;
             conn.write_all(r#"Not connected to station, Spoolman unavailable."#.as_ref())
                 .await?;
             return Ok(());
         }
-        let url = Url::parse(&format!("http://google.com{}", path)).unwrap();
+        let url = Url::parse(&format!("http://google.com{path}")).unwrap();
         let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         let value = url_params.get("value");
         let filament_id = url_params.get("filament_id");
@@ -314,7 +314,7 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let url = Url::parse(&format!("http://google.com{}", path)).unwrap();
+        let url = Url::parse(&format!("http://google.com{path}")).unwrap();
         let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         let m_value = url_params.get("m");
         let b_value = url_params.get("b");
@@ -423,7 +423,7 @@ impl WsHandler<'_> {
             multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference,
             multipliers.reference_r, multipliers.reference_g, multipliers.reference_b
         );
-
+        drop(multipliers);
         conn.initiate_response(200, None, &[("Content-Type", "application/json")])
             .await?;
         conn.write_all(json_response.as_bytes()).await?;
@@ -499,10 +499,10 @@ impl WsHandler<'_> {
         }
 
         // Clamp values to reasonable ranges
-        red = red.max(0.1).min(5.0);
-        green = green.max(0.1).min(5.0);
-        blue = blue.max(0.1).min(5.0);
-        brightness = brightness.max(0.1).min(5.0);
+        red = red.clamp(0.1, 5.0);
+        green = green.clamp(0.1, 5.0);
+        blue = blue.clamp(0.1, 5.0);
+        brightness = brightness.clamp(0.1, 5.0);
 
         // Get current TD reference to preserve it
         let current_td_reference = {
@@ -608,6 +608,7 @@ impl WsHandler<'_> {
         let current_lux = {
             let buffer = self.lux_buffer.lock().unwrap();
             let median = buffer.median();
+            drop(buffer);
             if let Some(current_reading) = median {
                 current_reading
             } else {
@@ -718,8 +719,7 @@ impl WsHandler<'_> {
         match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
             Ok(_) => {
                 let response = format!(
-                    r#"{{"status": "success", "red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}}}"#,
-                    optimized_red, optimized_green, optimized_blue, optimized_brightness, current_lux
+                    r#"{{"status": "success", "red": {optimized_red:.2}, "green": {optimized_green:.2}, "blue": {optimized_blue:.2}, "brightness": {optimized_brightness:.2}, "td_reference": {current_lux:.2}}}"#,
                 );
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -774,7 +774,7 @@ impl WsHandler<'_> {
         } else {
             // Already running, serve the last result if available
             let last = LAST_DATA.lock().unwrap();
-            last.clone().unwrap_or_else(|| "".to_string())
+            last.clone().unwrap_or_default()
         };
 
         conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
@@ -867,15 +867,15 @@ fn apply_spectral_response_correction(r: u16, g: u16, b: u16, wb_r: u16, wb_g: u
     let (r_final, g_final, b_final) = if max_corrected > 255.0 {
         let scale = 255.0 / max_corrected;
         (
-            (r_corrected * scale).round().min(255.0).max(0.0) as u8,
-            (g_corrected * scale).round().min(255.0).max(0.0) as u8,
-            (b_corrected * scale).round().min(255.0).max(0.0) as u8,
+            (r_corrected * scale).round().clamp(255.0,0.0) as u8,
+            (g_corrected * scale).round().clamp(255.0,0.0) as u8,
+            (b_corrected * scale).round().clamp(255.0,0.0) as u8,
         )
     } else {
         (
-            r_corrected.min(255.0).max(0.0) as u8,
-            g_corrected.min(255.0).max(0.0) as u8,
-            b_corrected.min(255.0).max(0.0) as u8,
+            r_corrected.clamp(255.0,0.0) as u8,
+            g_corrected.clamp(255.0,0.0) as u8,
+            b_corrected.clamp(255.0,0.0) as u8,
         )
     };
 
@@ -965,7 +965,6 @@ fn optimize_brightness(
     max_iterations: usize
 ) -> f32 {
     let mut best_brightness = multipliers.brightness;
-    let mut best_distance = f32::MAX;
 
     // Current distance
     let current_result = apply_complete_color_correction(
@@ -975,7 +974,7 @@ fn optimize_brightness(
         &multipliers
     );
     let mut current_distance = calculate_rgb_distance(current_result, target_color);
-    best_distance = current_distance;
+    let mut best_distance = current_distance;
 
     log::info!("Brightness optimization start: brightness={:.3}, distance={:.2}",
               multipliers.brightness, current_distance);
@@ -1060,7 +1059,6 @@ fn optimize_rgb_channels(
             _ => 127,
         };
 
-        let mut best_channel_distance = f32::MAX;
         let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
 
         // Get initial channel distance
@@ -1078,7 +1076,7 @@ fn optimize_rgb_channels(
             _ => 127,
         };
 
-        best_channel_distance = (initial_channel_value as f32 - target_channel_value as f32).abs();
+        let mut best_channel_distance = (initial_channel_value as f32 - target_channel_value as f32).abs();
 
         log::info!("{} channel optimization start: multiplier={:.3}, current={}, target={}, distance={:.2}",
                   channel, best_value, initial_channel_value, target_channel_value, best_channel_distance);
@@ -1193,7 +1191,7 @@ async fn read_data_with_buffer(
         let current_reading = {
             let mut locked_veml = veml.lock().unwrap();
             match locked_veml.read_lux() {
-                Ok(d) => d as f32,
+                Ok(d) => d,
                 Err(e) => {
                     log::error!("Failed to read sensor (attempt {}): {:?}", i + 1, e);
                     if i == 2 {
@@ -1301,7 +1299,7 @@ async fn read_data_with_buffer(
         {
             let mut locked_veml = veml.lock().unwrap();
             let mut buffer = lux_buffer.lock().unwrap();
-            let lux_reading = locked_veml.read_lux().unwrap_or(0.0) as f32;
+            let lux_reading = locked_veml.read_lux().unwrap_or(0.0);
             buffer.push(lux_reading);
         }
 
@@ -1368,7 +1366,7 @@ async fn read_data_with_buffer(
     // Step 2: Apply user RGB multipliers with lux-based brightness adjustment to corrected values
     let (r_final, g_final, b_final) = {
         let multipliers = rgb_multipliers.lock().unwrap();
-        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, final_median_lux, &*multipliers)
+        apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, final_median_lux, &multipliers)
     };
 
     // Update last measurement cache
@@ -1384,9 +1382,9 @@ async fn read_data_with_buffer(
     }
 
     // Create hex color string with corrected values
-    let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
+    let hex_color = format!("#{r_final:02X}{g_final:02X}{b_final:02X}");
 
-    let ws_message = format!("{:.2},{},{}", adjusted_td_value, hex_color, buffer_count);
+    let ws_message = format!("{adjusted_td_value:.2},{hex_color},{buffer_count}");
 
     // Log buffer status and detailed color information
     let (lux_len, rgb_len) = {

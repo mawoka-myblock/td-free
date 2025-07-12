@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+
+
 mod device_impl;
 
 /// All possible errors in this crate
@@ -11,7 +14,6 @@ impl<E> From<E> for Error<E> {
         Error::I2C(other)
     }
 }
-
 const DEVICE_ADDRESS: u8 = 0x10;
 
 /// VEML3328 device driver.

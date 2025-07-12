@@ -13,12 +13,8 @@ use esp_idf_svc::{
         Configuration as WifiConfiguration, EspWifi,
     },
 };
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::signal::Signal;
 use embassy_time::Duration;
 use log::{info, warn, error, debug};
-use std::sync::atomic::{AtomicBool, Ordering};
-use futures;
 
 use crate::led::set_led;
 use crate::LedType;
@@ -57,7 +53,7 @@ pub async fn wifi_connection_maintainer(
             embassy_time::Timer::after_millis(1000).await;
             {
                 let mut wifi_guard = wifi.lock().unwrap();
-                let _ = wifi_client_with_retries(&ssid, &password, &mut *wifi_guard).await;
+                let _ = wifi_client_with_retries(&ssid, &password, &mut wifi_guard).await;
             }
             // LED/status will be set by wifi_client_with_retries on success
         }
@@ -128,7 +124,7 @@ async fn wifi_client_single_attempt(
 
     let ours = ap_infos.iter().find(|a| a.ssid == ssid);
 
-    let (channel, signal_strength) = if let Some(ours) = ours {
+    let (channel, _) = if let Some(ours) = ours {
         info!(
             "Found configured access point {} on channel {} with signal strength {} dBm",
             ssid, ours.channel, ours.signal_strength
@@ -143,7 +139,7 @@ async fn wifi_client_single_attempt(
         }
 
         // Determine the best auth method based on scan results
-        let detected_auth = match ours.auth_method {
+        let _ = match ours.auth_method {
             Some(auth) => {
                 info!("Detected auth method: {:?}", auth);
                 auth
@@ -290,7 +286,7 @@ pub async fn wifi_setup(
         Err(e) => {
             error!("NVS read error: {:?}, starting hotspot", e);
             let mut wifi_guard = wifi.lock().unwrap();
-            let ip = wifi_hotspot(&mut *wifi_guard).await?;
+            let ip = wifi_hotspot(&mut wifi_guard).await?;
             set_led(ws2812, 255, 0, 255);
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;
@@ -306,7 +302,7 @@ pub async fn wifi_setup(
     if wifi_password.is_none() || wifi_ssid.is_none() {
         info!("SSID and/or Password not configured, starting hotspot");
         let mut wifi_guard = wifi.lock().unwrap();
-        let ip = wifi_hotspot(&mut *wifi_guard).await?;
+        let ip = wifi_hotspot(&mut wifi_guard).await?;
         set_led(ws2812, 255, 0, 255);
         let mut w_status = wifi_status.lock().unwrap();
         *w_status = WifiEnum::HotSpot;
@@ -320,7 +316,7 @@ pub async fn wifi_setup(
 
     let client_result = {
         let mut wifi_guard = wifi.lock().unwrap();
-        wifi_client_with_retries(ssid, password, &mut *wifi_guard).await
+        wifi_client_with_retries(ssid, password, &mut wifi_guard).await
     };
 
     match client_result {
@@ -345,7 +341,7 @@ pub async fn wifi_setup(
             embassy_time::Timer::after_millis(1000).await;
 
             let mut wifi_guard = wifi.lock().unwrap();
-            let ip = wifi_hotspot(&mut *wifi_guard).await?;
+            let ip = wifi_hotspot(&mut wifi_guard).await?;
             set_led(ws2812, 255, 0, 255); // Magenta for hotspot
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::HotSpot;

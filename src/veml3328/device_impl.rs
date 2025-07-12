@@ -33,7 +33,7 @@ impl Config {
             bits: self.bits | mask,
         }
     }
-
+    #[allow(dead_code)]
     fn with_low(self, mask: u16) -> Self {
         Config {
             bits: self.bits & !mask,

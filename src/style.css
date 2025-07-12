@@ -117,6 +117,7 @@ h1 {
 
 .rgb-control input[type="number"].value-display {
     -moz-appearance: textfield;
+    appearance: textfield;
 }
 .rgb-control input[type="number"].value-display::-webkit-outer-spin-button,
 .rgb-control input[type="number"].value-display::-webkit-inner-spin-button {

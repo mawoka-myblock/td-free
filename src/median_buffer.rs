@@ -44,7 +44,7 @@ impl RunningMedianBuffer {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
-
+    #[allow(dead_code)]
     pub fn is_full(&self) -> bool {
         self.buffer.len() >= self.capacity
     }
@@ -94,7 +94,8 @@ impl RunningMedianBufferU16 {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
-
+    
+    #[allow(dead_code)]
     pub fn is_full(&self) -> bool {
         self.buffer.len() >= self.capacity
     }

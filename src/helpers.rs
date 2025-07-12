@@ -439,19 +439,19 @@ impl embedded_hal::i2c::I2c for HardwareI2cInstance {
     fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
         self.driver.lock().unwrap()
             .read(address, read, 1000)
-            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+            .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 
     fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
         self.driver.lock().unwrap()
             .write(address, write, 1000)
-            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+            .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 
     fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
         self.driver.lock().unwrap()
             .write_read(address, write, read, 1000)
-            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+            .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 
     fn transaction(
@@ -461,7 +461,7 @@ impl embedded_hal::i2c::I2c for HardwareI2cInstance {
     ) -> Result<(), Self::Error> {
         self.driver.lock().unwrap()
             .transaction(address, operations, 1000)
-            .map_err(|e| esp_idf_svc::hal::i2c::I2cError::other(e))
+            .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 }
 
