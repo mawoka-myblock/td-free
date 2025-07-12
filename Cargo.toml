@@ -45,7 +45,9 @@ embedded-svc = {version = "*"}
 serde = {version = "*"}
 serde_json = {version = "*"}
 libm = "0.2"
-bitbang-hal = "0.3"
+nb = "1.1"
+futures = "0.3"
+once_cell = "1.19"
 
 [build-dependencies]
 embuild = {version = "0.33", features = ["espidf"]}

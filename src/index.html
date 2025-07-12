@@ -1,239 +1,111 @@
 <!DOCTYPE html>
 <html lang="en">
-
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Td-Free</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f5f7fa;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-
-        .container {
-            background-color: #fff;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-            padding: 20px;
-            width: 80%;
-            max-width: 600px;
-            min-height: 300px;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-        }
-
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 20px;
-        }
-
-        .status {
-            text-align: center;
-            padding: 10px;
-            background-color: #fbe9e7;
-            color: #d32f2f;
-            border-radius: 5px;
-            margin: 10px 0;
-        }
-
-        .status.connected {
-            background-color: #e8f5e9;
-            color: #388e3c;
-        }
-
-        .wifi-link {
-            margin-top: auto;
-            margin-left: auto;
-            margin-right: auto;
-        }
-
-        #content {
-            margin: auto;
-            font-size: 3rem;
-        }
-
-        .action-btn {
-            margin: 10px auto;
-            padding: 10px 20px;
-            background-color: #00796b;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            display: block;
-        }
-
-        .action-btn:disabled {
-            pointer-events: none;
-            opacity: 0.3;
-        }
-
-        #content {
-            text-align: center;
-        }
-
-        .hidden {
-            display: none;
-        }
-    </style>
+    <link rel="stylesheet" href="./style.css">
 </head>
 
 <body>
     <div class="container">
         <h1>Td-Free</h1>
-        <div id="status" class="status">Connecting...</div>
         <p id="content"></p>
-        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to
-            Spoolman</button>
-        <button id="averaged-btn" class="action-btn average-btn" onclick="toggleAveragedData()">Show averaged
-            data</button>
-        <div style="display: flex; flex-direction: column; margin-top: auto;">
-            <a href="/wifi" class="wifi-link" onclick="wifi_cfg">Wifi Config</a>
-            <p class="wifi-link" style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
-            <!-- <a href="/update" class="wifi-link" onclick="update_fw">Update Firmware</a> -->
+
+        <div id="color-display" class="color-display hidden">
+            <div id="color-square" class="color-square" onclick="copyHex()"></div>
+            <div id="color-hex" class="color-hex" onclick="copyHex()"></div>
+        </div>
+
+        <div id="confidence-indicator" class="confidence-indicator hidden">
+            <div>Confidence: <span id="confidence-text">0%</span></div>
+            <div class="confidence-bar">
+                <div id="confidence-fill" class="confidence-fill"></div>
+            </div>
+        </div>
+
+        <div id="rgb-correction" class="rgb-correction">
+            <h3 class="collapsible-header" onclick="toggleCalibrationBlock()">Color Correction</h3>
+            <div id="calibration-content" class="hidden">
+                <div class="ref-color">
+                    <label>Target Color: </label>
+                    <div id="ref-color-square" class="color-square" style="display:inline-block;vertical-align:middle;width:30px;height:30px;" onclick="openColorPickerModal()"></div>
+                    <span id="ref-hex">#7F7F7F</span>
+                </div>
+
+                <div class="rgb-control">
+                    <label>R:</label>
+                    <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('red', this.value)"
+                           onchange="updateMultAndSave('red', this.value)">
+                    <div id="red-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>G:</label>
+                    <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('green', this.value)"
+                           onchange="updateMultAndSave('green', this.value)">
+                    <div id="green-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>B:</label>
+                    <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('blue', this.value)"
+                           onchange="updateMultAndSave('blue', this.value)">
+                    <div id="blue-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>☀:</label>
+                    <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('brightness', this.value)"
+                           onchange="updateMultAndSave('brightness', this.value)">
+                    <div id="bright-val" class="value-display">1.00</div>
+                </div>
+
+                <button class="calibrate-btn" id="cal-btn" onclick="autoCal()">Auto-Calibrate</button>
+                <button class="reset-btn" onclick="resetMult()">Reset</button>
+            </div>
+        </div>
+        <!-- Custom RGB Picker Modal -->
+        <div id="color-picker-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);z-index:1000;justify-content:center;align-items:center;">
+            <div style="background:#fff;padding:20px;border-radius:10px;min-width:260px;box-shadow:0 2px 12px rgba(0,0,0,0.2);">
+                <h4 style="margin-top:0;">Pick Reference Color</h4>
+                <div style="display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+                    <div id="picker-preview" style="width:40px;height:40px;border-radius:8px;border:2px solid #ccc;margin-right:10px;cursor:pointer;" onclick="document.getElementById('native-color-picker').click()"></div>
+                    <input type="color" id="native-color-picker" oninput="updateFromNativePicker(this.value)" style="display:none;">
+                    <span id="picker-hex" style="font-family:monospace;font-size:16px;"></span>
+                </div>
+                <div class="rgb-control">
+                    <label>R:</label>
+                    <input type="range" id="picker-r" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-r-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'r')">
+                </div>
+                <div class="rgb-control">
+                    <label>G:</label>
+                    <input type="range" id="picker-g" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-g-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'g')">
+                </div>
+                <div class="rgb-control">
+                    <label>B:</label>
+                    <input type="range" id="picker-b" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-b-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'b')">
+                </div>
+                <div style="display:flex;gap:10px;margin-top:15px;">
+                    <button onclick="applyPickerColor()" class="calibrate-btn" style="flex:1;">Apply</button>
+                    <button onclick="closeColorPickerModal()" class="reset-btn" style="flex:1;">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to Spoolman</button>
+
+        <div style="margin-top: auto;">
+            <a href="/wifi">Wifi Config</a><br>
+            <a href="/settings">Settings</a><br>
+            <p style="color: gray; font-size: smaller;">Version <span id="version-span"></span></p>
         </div>
     </div>
 
-    <script>
-        let socket;
-        let intervalId;
-        let fallbackInterval;
-        let fallbackEnabled = false;
-        let showing_averaged = false;
-        let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
-
-        function saveToSpoolman() {
-            const promted_id = prompt("Please enter the Spoolman Filament ID")
-            if (promted_id === "" || !promted_id) return
-            const id = parseInt(promted_id)
-            if (isNaN(id)) {
-                alert("Negative ID is impossible, not saving")
-                return
-            }
-            const el = document.getElementById("content");
-            const value = parseFloat(el.innerText)
-            if (isNaN(value)) {
-                alert("Td currently measured is not a number or filament is not inserted.")
-                return
-            }
-            window.location.assign(`/spoolman/set?filament_id=${id}&value=${value}`)
-        }
-
-        function connectWebSocket() {
-            socket = new WebSocket(`ws://${window.location.hostname}/ws`);
-            const statusContainer = document.getElementById("status");
-
-            socket.addEventListener("open", () => {
-                statusContainer.textContent = "Connected to WebSocket server";
-                statusContainer.classList.add("connected");
-                fallbackEnabled = false;
-                clearInterval(fallbackInterval);
-                if (!showing_averaged) {
-                    intervalId = setInterval(() => {
-                        if (socket.readyState === WebSocket.OPEN) {
-                            socket.send("p");
-                        }
-                    }, 1000);
-                }
-            });
-
-            socket.addEventListener("message", (event) => {
-                if (event.data === 'p') return;
-                if (!showing_averaged) updateContent(event.data);
-            });
-
-            socket.addEventListener("close", startFallback);
-            socket.addEventListener("error", startFallback);
-            window.addEventListener("beforeunload", () => socket.close());
-        }
-
-        function startFallback() {
-            if (fallbackEnabled || showing_averaged) return;
-            fallbackEnabled = true;
-            document.getElementById("status").textContent = "Fallback mode enabled";
-            clearInterval(intervalId);
-            fallbackInterval = setInterval(fetchFallbackData, 1000);
-            attemptReconnect();
-        }
-
-        function attemptReconnect() {
-            if (showing_averaged) return;
-            setTimeout(() => {
-                if (fallbackEnabled && !showing_averaged) connectWebSocket();
-            }, 5000);
-        }
-
-        function fetchFallbackData() {
-            if (showing_averaged) return;
-            fetch("/fallback")
-                .then(response => response.text())
-                .then(data => updateContent(data))
-                .catch(() => document.getElementById("status").textContent = "Error fetching fallback data");
-        }
-
-        function toggleAveragedData() {
-            const averagedBtn = document.getElementById("averaged-btn");
-            if (showing_averaged) {
-                showing_averaged = false;
-                averagedBtn.textContent = "Show averaged data";
-                connectWebSocket();
-            } else {
-                document.getElementById("status").textContent = "Fetching averaged data..."
-                averagedBtn.disabled = true
-                showing_averaged = true;
-                stopConnections();
-                setTimeout(() => {
-                    fetchAveragedData();
-                }, 850)
-            }
-        }
-
-        function stopConnections() {
-            if (socket) socket.close();
-            clearInterval(intervalId);
-            clearInterval(fallbackInterval);
-        }
-
-        function fetchAveragedData() {
-            fetch("/averaged")
-                .then(response => response.text())
-                .then(data => {
-                    updateContent(data); document.getElementById("status").textContent = "Showing averaged data"; document.getElementById("averaged-btn").textContent = "Go back to live mode";
-                    document.getElementById("averaged-btn").disabled = false
-                })
-                .catch((e) => { document.getElementById("status").textContent = `Error: ${e}` });
-        }
-
-        function updateContent(data) {
-            const el = document.getElementById("content");
-            if (data === "no_filament") {
-                document.getElementById("save-to-spoolman-btn").classList.add("hidden")
-                el.innerText = "No filament inserted! Insert some";
-            } else {
-                if (spoolman_available) {
-                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden")
-                }
-                const num = parseFloat(data);
-                el.innerText = isNaN(num) ? "An error occurred!" : num.toFixed(2);
-            }
-        }
-
-        const start_fallback_if_ws_failed = () => {
-            if (socket.readyState === WebSocket.OPEN) return
-            startFallback()
-        }
-        setTimeout(connectWebSocket, 300)
-        setTimeout(start_fallback_if_ws_failed, 1300)
-
-    </script>
+    <script src="./script.js"></script>
 </body>
-
 </html>
