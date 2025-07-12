@@ -184,6 +184,27 @@ fn main() -> Result<(), ()> {
     .unwrap();
     let mut wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
 
+    let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
+    let wifi = Arc::new(Mutex::new(wifi));
+
+    // Spawn WiFi thread for background management
+    let wifi_status_clone = wifi_status.clone();
+    let wifi_clone = wifi.clone();
+    let ws2812_clone = ws2812.clone();
+    let nvs_clone = nvs.clone();
+
+    std::thread::spawn(move || {
+        // Run the async wifi thread in a blocking executor
+        esp_idf_svc::hal::task::block_on(wifi::wifi_thread(
+            wifi_clone,
+            nvs_clone,
+            ws2812_clone,
+            wifi_status_clone,
+        ));
+    });
+
+    log::info!("WiFi thread started");
+
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     FreeRtos.delay_ms(500);
     let baseline_reading: f32 = take_baseline_reading(veml.clone());
@@ -199,26 +220,9 @@ fn main() -> Result<(), ()> {
     let dark_rgb_baseline: (u16, u16, u16) = rgb_white_balance;
 
     log::info!("Baseline readings completed with white balance calibration");
-    let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
 
-    // Wrap wifi in Arc<Mutex<...>> to match wifi_setup signature
-    let wifi = Arc::new(Mutex::new(wifi));
 
-    // --- CHANGED: handle new wifi_setup return type and spawn maintainer if connected ---
-    let (wifi_mode, _hotspot_ip, creds) = block_on(wifi::wifi_setup(
-        wifi.clone(),
-        nvs.clone(),
-        ws2812.clone(),
-        wifi_status.clone(),
-    ))
-    .unwrap();
 
-    if let (wifi::WifiEnum::Connected, Some((ssid, password))) = (wifi_mode, creds) {
-        log::warn!("WiFi maintainer task not started: must be spawned from an async context!");
-    }
-    // --- END CHANGED ---
-
-    log::info!("WiFi Started");
 
     let arced_nvs = Arc::new(nvs.clone());
 

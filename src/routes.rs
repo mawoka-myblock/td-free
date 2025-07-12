@@ -33,6 +33,8 @@ use crate::{
 };
 
 static INDEX_HTML: &str = include_str!("index.html");
+static STYLE_CSS: &str = include_str!("style.css");
+static SCRIPT_JS: &str = include_str!("script.js");
 
 impl WsHandler<'_> {
     pub async fn server_index_page<T, const N: usize>(
@@ -788,6 +790,12 @@ impl Handler for WsHandler<'_> {
                 .await?;
         } else if headers.path == "/" || headers.path.is_empty() {
             WsHandler::server_index_page(self, conn).await?;
+        } else if headers.path == "/style.css" {
+            conn.initiate_response(200, None, &[("Content-Type", "text/css")]).await?;
+            conn.write_all(STYLE_CSS.as_bytes()).await?;
+        } else if headers.path == "/script.js" {
+            conn.initiate_response(200, None, &[("Content-Type", "application/javascript")]).await?;
+            conn.write_all(SCRIPT_JS.as_bytes()).await?;
         } else if headers.path.starts_with("/settings") {
             WsHandler::algorithm_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/wifi") {

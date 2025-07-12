@@ -4,184 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Td-Free</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f5f7fa;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            margin: 0;
-            padding: 20px;
-            box-sizing: border-box;
-        }
-
-        .container {
-            background-color: #fff;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
-            border-radius: 10px;
-            padding: 20px;
-            width: 90%;
-            max-width: 700px;
-            min-height: 300px;
-        }
-
-        h1 {
-            text-align: center;
-            color: #333;
-            margin-bottom: 20px;
-        }
-
-        #content {
-            text-align: center;
-            font-size: 3rem;
-        }
-
-        .action-btn {
-            margin: 10px auto;
-            padding: 10px 20px;
-            background-color: #00796b;
-            color: white;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            display: block;
-        }
-
-        .action-btn:disabled {
-            pointer-events: none;
-            opacity: 0.3;
-        }
-
-        .hidden {
-            display: none;
-        }
-        
-        .color-display {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 15px auto;
-            gap: 10px;
-        }
-        
-        .color-square {
-            width: 50px;
-            height: 50px;
-            border: 2px solid #ccc;
-            border-radius: 8px;
-            cursor: pointer;
-        }
-        
-        .color-hex {
-            font-family: monospace;
-            font-size: 14px;
-            padding: 5px 10px;
-            background-color: #f5f5f5;
-            border: 1px solid #ddd;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .rgb-correction {
-            margin: 20px auto;
-            padding: 15px;
-            border: 1px solid #ddd;
-            border-radius: 8px;
-            background-color: #f9f9f9;
-            max-width: 400px;
-        }
-
-        .rgb-control {
-            display: flex;
-            align-items: center;
-            margin: 10px 0;
-            gap: 10px;
-        }
-
-        .rgb-control label {
-            font-weight: bold;
-            min-width: 20px;
-            font-size: 14px;
-        }
-
-        .rgb-control input[type="range"] {
-            flex: 1;
-            margin: 0 10px;
-        }
-
-        .rgb-control .value-display {
-            font-family: monospace;
-            font-size: 12px;
-            min-width: 50px;
-            text-align: center;
-            padding: 2px 5px;
-            background-color: #fff;
-            border: 1px solid #ccc;
-            border-radius: 3px;
-        }
-
-        .ref-color {
-            margin: 15px 0;
-            text-align: center;
-        }
-
-        .ref-color input[type="color"] {
-            width: 50px;
-            height: 30px;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-        }
-
-        .calibrate-btn {
-            background-color: #ff9800;
-            color: white;
-            border: none;
-            padding: 8px 15px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-            width: 100%;
-            margin: 10px 0;
-        }
-
-        .reset-btn {
-            background-color: #666;
-            color: white;
-            border: none;
-            padding: 5px 15px;
-            border-radius: 3px;
-            cursor: pointer;
-            font-size: 12px;
-            width: 100%;
-        }
-
-        .confidence-indicator {
-            margin: 10px auto;
-            text-align: center;
-            font-size: 12px;
-            color: #666;
-        }
-
-        .confidence-bar {
-            width: 200px;
-            height: 6px;
-            background-color: #ddd;
-            border-radius: 3px;
-            margin: 5px auto;
-            overflow: hidden;
-        }
-
-        .confidence-fill {
-            height: 100%;
-            background: linear-gradient(to right, #ff4444, #ffaa00, #44ff44);
-            border-radius: 3px;
-            transition: width 0.3s ease;
-            width: 0%;
-        }
-    </style>
+    <link rel="stylesheet" href="./style.css">
 </head>
 
 <body>
@@ -202,45 +25,76 @@
         </div>
 
         <div id="rgb-correction" class="rgb-correction">
-            <h3>Color Correction</h3>
+            <h3 class="collapsible-header" onclick="toggleCalibrationBlock()">Color Correction</h3>
+            <div id="calibration-content" class="hidden">
+                <div class="ref-color">
+                    <label>Target Color: </label>
+                    <div id="ref-color-square" class="color-square" style="display:inline-block;vertical-align:middle;width:30px;height:30px;" onclick="openColorPickerModal()"></div>
+                    <span id="ref-hex">#7F7F7F</span>
+                </div>
 
-            <div class="ref-color">
-                <label>Target Color: </label>
-                <input type="color" id="ref-color" value="#7F7F7F" onchange="updateRefColor()">
-                <span id="ref-hex">#7F7F7F</span>
-            </div>
+                <div class="rgb-control">
+                    <label>R:</label>
+                    <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('red', this.value)"
+                           onchange="updateMultAndSave('red', this.value)">
+                    <div id="red-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>G:</label>
+                    <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('green', this.value)"
+                           onchange="updateMultAndSave('green', this.value)">
+                    <div id="green-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>B:</label>
+                    <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('blue', this.value)"
+                           onchange="updateMultAndSave('blue', this.value)">
+                    <div id="blue-val" class="value-display">1.00</div>
+                </div>
+                <div class="rgb-control">
+                    <label>☀:</label>
+                    <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00"
+                           oninput="updateSliderDisplay('brightness', this.value)"
+                           onchange="updateMultAndSave('brightness', this.value)">
+                    <div id="bright-val" class="value-display">1.00</div>
+                </div>
 
-            <div class="rgb-control">
-                <label>R:</label>
-                <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                       oninput="updateSliderDisplay('red', this.value)"
-                       onchange="updateMultAndSave('red', this.value)">
-                <div id="red-val" class="value-display">1.00</div>
+                <button class="calibrate-btn" id="cal-btn" onclick="autoCal()">Auto-Calibrate</button>
+                <button class="reset-btn" onclick="resetMult()">Reset</button>
             </div>
-            <div class="rgb-control">
-                <label>G:</label>
-                <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                       oninput="updateSliderDisplay('green', this.value)"
-                       onchange="updateMultAndSave('green', this.value)">
-                <div id="green-val" class="value-display">1.00</div>
+        </div>
+        <!-- Custom RGB Picker Modal -->
+        <div id="color-picker-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);z-index:1000;justify-content:center;align-items:center;">
+            <div style="background:#fff;padding:20px;border-radius:10px;min-width:260px;box-shadow:0 2px 12px rgba(0,0,0,0.2);">
+                <h4 style="margin-top:0;">Pick Reference Color</h4>
+                <div style="display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
+                    <div id="picker-preview" style="width:40px;height:40px;border-radius:8px;border:2px solid #ccc;margin-right:10px;cursor:pointer;" onclick="document.getElementById('native-color-picker').click()"></div>
+                    <input type="color" id="native-color-picker" oninput="updateFromNativePicker(this.value)" style="display:none;">
+                    <span id="picker-hex" style="font-family:monospace;font-size:16px;"></span>
+                </div>
+                <div class="rgb-control">
+                    <label>R:</label>
+                    <input type="range" id="picker-r" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-r-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'r')">
+                </div>
+                <div class="rgb-control">
+                    <label>G:</label>
+                    <input type="range" id="picker-g" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-g-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'g')">
+                </div>
+                <div class="rgb-control">
+                    <label>B:</label>
+                    <input type="range" id="picker-b" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
+                    <input type="number" id="picker-b-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'b')">
+                </div>
+                <div style="display:flex;gap:10px;margin-top:15px;">
+                    <button onclick="applyPickerColor()" class="calibrate-btn" style="flex:1;">Apply</button>
+                    <button onclick="closeColorPickerModal()" class="reset-btn" style="flex:1;">Cancel</button>
+                </div>
             </div>
-            <div class="rgb-control">
-                <label>B:</label>
-                <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                       oninput="updateSliderDisplay('blue', this.value)"
-                       onchange="updateMultAndSave('blue', this.value)">
-                <div id="blue-val" class="value-display">1.00</div>
-            </div>
-            <div class="rgb-control">
-                <label>☀:</label>
-                <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00"
-                       oninput="updateSliderDisplay('brightness', this.value)"
-                       onchange="updateMultAndSave('brightness', this.value)">
-                <div id="bright-val" class="value-display">1.00</div>
-            </div>
-
-            <button class="calibrate-btn" id="cal-btn" onclick="autoCal()">Auto-Calibrate</button>
-            <button class="reset-btn" onclick="resetMult()">Reset</button>
         </div>
 
         <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to Spoolman</button>
@@ -248,235 +102,10 @@
         <div style="margin-top: auto;">
             <a href="/wifi">Wifi Config</a><br>
             <a href="/settings">Settings</a><br>
-            <p style="color: gray; font-size: smaller;">Version {{VERSION}}</p>
+            <p style="color: gray; font-size: smaller;">Version <span id="version-span"></span></p>
         </div>
     </div>
 
-    <script>
-        let intervalId;
-        let spoolman_available = {{ SPOOLMAN_AVAILABLE }};
-        let currentHexColor = null;
-        let rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
-        let saveTimeout = null;
-
-        function loadMult() {
-            fetch('/rgb_multipliers')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.red !== undefined) rgbMult.red = data.red;
-                    if (data.green !== undefined) rgbMult.green = data.green;
-                    if (data.blue !== undefined) rgbMult.blue = data.blue;
-                    if (data.brightness !== undefined) rgbMult.brightness = data.brightness;
-                    if (data.td_reference !== undefined) rgbMult.td_reference = data.td_reference;
-                    if (data.reference_r !== undefined) rgbMult.reference_r = data.reference_r;
-                    if (data.reference_g !== undefined) rgbMult.reference_g = data.reference_g;
-                    if (data.reference_b !== undefined) rgbMult.reference_b = data.reference_b;
-                    updateSliders();
-                    updateRefDisplay();
-                })
-                .catch(err => console.warn('Load failed:', err));
-        }
-
-        function updateSliders() {
-            document.getElementById('red-mult').value = rgbMult.red.toFixed(2);
-            document.getElementById('green-mult').value = rgbMult.green.toFixed(2);
-            document.getElementById('blue-mult').value = rgbMult.blue.toFixed(2);
-            document.getElementById('bright-mult').value = rgbMult.brightness.toFixed(2);
-            document.getElementById('red-val').textContent = rgbMult.red.toFixed(2);
-            document.getElementById('green-val').textContent = rgbMult.green.toFixed(2);
-            document.getElementById('blue-val').textContent = rgbMult.blue.toFixed(2);
-            document.getElementById('bright-val').textContent = rgbMult.brightness.toFixed(2);
-        }
-
-        function updateRefDisplay() {
-            const r = rgbMult.reference_r;
-            const g = rgbMult.reference_g;
-            const b = rgbMult.reference_b;
-            const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-            document.getElementById('ref-color').value = hex;
-            document.getElementById('ref-hex').textContent = hex.toUpperCase();
-        }
-
-        function updateRefColor() {
-            const hex = document.getElementById('ref-color').value;
-            const r = parseInt(hex.substr(1, 2), 16);
-            const g = parseInt(hex.substr(3, 2), 16);
-            const b = parseInt(hex.substr(5, 2), 16);
-            rgbMult.reference_r = r;
-            rgbMult.reference_g = g;
-            rgbMult.reference_b = b;
-            document.getElementById('ref-hex').textContent = hex.toUpperCase();
-            saveMult();
-        }
-
-        // Update only the display value without saving
-        function updateSliderDisplay(channel, value) {
-            const numValue = parseFloat(value);
-            rgbMult[channel] = numValue;
-            document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
-            // No updateColorDisplay here!
-        }
-
-        // Update and save the value (called on slider release)
-        function updateMultAndSave(channel, value) {
-            const numValue = parseFloat(value);
-            rgbMult[channel] = numValue;
-            document.getElementById(`${channel === 'brightness' ? 'bright' : channel}-val`).textContent = numValue.toFixed(2);
-
-            // Save immediately and let backend handle color update
-            saveMult();
-        }
-
-        function saveMult() {
-            fetch('/rgb_multipliers', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(rgbMult)
-            }).catch(err => console.warn('Save failed:', err));
-        }
-
-        function autoCal() {
-            const button = document.getElementById('cal-btn');
-            button.disabled = true;
-            button.textContent = 'Calibrating...';
-
-            fetch('/auto_calibrate', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    reference_r: rgbMult.reference_r,
-                    reference_g: rgbMult.reference_g,
-                    reference_b: rgbMult.reference_b
-                })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.status === 'success') {
-                    rgbMult.red = data.red;
-                    rgbMult.green = data.green;
-                    rgbMult.blue = data.blue;
-                    rgbMult.brightness = data.brightness;
-                    if (data.td_reference !== undefined) {
-                        rgbMult.td_reference = data.td_reference;
-                    }
-                    updateSliders();
-                    updateColorDisplay();
-                    button.textContent = 'Success!';
-                } else {
-                    alert('Calibration failed: ' + (data.message || 'Unknown error'));
-                    button.textContent = 'Auto-Calibrate';
-                }
-                setTimeout(() => {
-                    button.textContent = 'Auto-Calibrate';
-                    button.disabled = false;
-                }, 2000);
-            })
-            .catch(err => {
-                console.warn('Calibration failed:', err);
-                alert('Calibration failed. Please try again.');
-                button.textContent = 'Auto-Calibrate';
-                button.disabled = false;
-            });
-        }
-
-        function resetMult() {
-            rgbMult = { red: 1.0, green: 1.0, blue: 1.0, brightness: 1.0, td_reference: 50.0, reference_r: 127, reference_g: 127, reference_b: 127 };
-            updateSliders();
-            updateRefDisplay();
-            saveMult();
-            updateColorDisplay();
-        }
-
-        function updateColorDisplay() {
-            if (!currentHexColor) return;
-            // Only display the color as received from backend, do not apply multipliers again
-            document.getElementById('color-square').style.backgroundColor = currentHexColor;
-            document.getElementById('color-hex').textContent = currentHexColor;
-        }
-
-        function copyHex() {
-            const hex = document.getElementById('color-hex').textContent;
-            if (!hex) return;
-            navigator.clipboard.writeText(hex).then(() => {
-                const el = document.getElementById("color-hex");
-                const orig = el.textContent;
-                el.textContent = "Copied!";
-                setTimeout(() => el.textContent = orig, 1500);
-            }).catch(() => alert('Color: ' + hex));
-        }
-
-        function saveToSpoolman() {
-            const id = prompt("Spoolman Filament ID");
-            if (!id) return;
-            const val = parseFloat(document.getElementById("content").innerText);
-            if (isNaN(val)) {
-                alert("No valid measurement");
-                return;
-            }
-            window.location.assign(`/spoolman/set?filament_id=${id}&value=${val}`);
-        }
-
-        function startPolling() {
-            intervalId = setInterval(() => {
-                fetch("/fallback")
-                    .then(response => response.text())
-                    .then(data => updateContent(data))
-                    .catch(err => console.warn('Polling error:', err));
-            }, 1000);
-        }
-
-        function updateContent(data) {
-            const el = document.getElementById("content");
-            const colorDisplay = document.getElementById("color-display");
-            const confidenceIndicator = document.getElementById("confidence-indicator");
-
-            if (data === "no_filament") {
-                document.getElementById("save-to-spoolman-btn").classList.add("hidden");
-                colorDisplay.classList.add("hidden");
-                confidenceIndicator.classList.add("hidden");
-                el.innerText = "No filament inserted!";
-                currentHexColor = null;
-                return;
-            }
-            
-            const parts = data.split(',');
-            if (parts.length >= 2 && parts[1].startsWith('#')) {
-                const numValue = parseFloat(parts[0]);
-                const hexColor = parts[1];
-                const confidence = parts.length >= 3 ? parseInt(parts[2]) || 0 : 0;
-
-                if (spoolman_available) {
-                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
-                }
-                
-                el.innerText = isNaN(numValue) ? "Error!" : numValue.toFixed(2);
-                colorDisplay.classList.remove("hidden");
-                confidenceIndicator.classList.remove("hidden");
-                currentHexColor = hexColor;
-                updateColorDisplay();
-                updateConfidence(confidence);
-            } else {
-                if (spoolman_available) {
-                    document.getElementById("save-to-spoolman-btn").classList.remove("hidden");
-                }
-                colorDisplay.classList.add("hidden");
-                confidenceIndicator.classList.add("hidden");
-                currentHexColor = null;
-                const num = parseFloat(data);
-                el.innerText = isNaN(num) ? "Error!" : num.toFixed(2);
-            }
-        }
-
-        function updateConfidence(sampleCount) {
-            const maxSamples = 100; // Match the buffer size
-            const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
-
-            document.getElementById('confidence-text').textContent = `${percentage.toFixed(0)}%`;
-            document.getElementById('confidence-fill').style.width = `${percentage}%`;
-        }
-
-        window.addEventListener('load', loadMult);
-        setTimeout(startPolling, 300);
-    </script>
+    <script src="./script.js"></script>
 </body>
 </html>

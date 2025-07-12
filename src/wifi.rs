@@ -423,3 +423,43 @@ async fn wifi_hotspot(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<
     }
 }
 
+/// Standalone WiFi thread: manages connection and keeps it alive in the background.
+pub async fn wifi_thread(
+    wifi: Arc<Mutex<AsyncWifi<EspWifi<'static>>>>,
+    nvs: EspNvsPartition<NvsDefault>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+) {
+    // Initial setup: connect or start hotspot
+    let (wifi_mode, _hotspot_ip, creds) = match wifi_setup(
+        wifi.clone(),
+        nvs,
+        ws2812.clone(),
+        wifi_status.clone(),
+    ).await {
+        Ok(res) => res,
+        Err(e) => {
+            error!("WiFi setup failed: {:?}", e);
+            return;
+        }
+    };
+
+    // If connected, spawn the maintainer loop
+    if let (WifiEnum::Connected, Some((ssid, password))) = (wifi_mode, creds) {
+        info!("Spawning WiFi connection maintainer thread");
+        let wifi_clone = wifi.clone();
+        let ws2812_clone = ws2812.clone();
+        let wifi_status_clone = wifi_status.clone();
+        std::thread::spawn(move || {
+            esp_idf_svc::hal::task::block_on(async move {
+                wifi_connection_maintainer(
+                    wifi_clone,
+                    ssid,
+                    password,
+                    ws2812_clone,
+                    wifi_status_clone,
+                ).await;
+            });
+        });
+    }
+}
