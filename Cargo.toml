@@ -1,0 +1,77 @@
+[package]
+edition = "2021"
+name    = "firmware"
+version = "0.1.0"
+
+[[bin]]
+name = "firmware"
+path = "./src/bin/main.rs"
+
+[dependencies]
+embassy-net = { version = "0.7.0", features = [
+  "dhcpv4",
+  "medium-ethernet",
+  "tcp",
+  "udp",
+] }
+embedded-io = "0.6.1"
+embedded-io-async = "0.6.1"
+esp-alloc = "0.8.0"
+esp-backtrace = { version = "0.16.0", features = [
+  "esp32c3",
+  "exception-handler",
+  "panic-handler",
+  "println",
+] }
+esp-hal = { version = "1.0.0-beta.1", features = ["esp32c3", "unstable"] }
+esp-println = { version = "0.14.0", features = ["esp32c3", "log-04"] }
+log = { version = "0.4.21" }
+smoltcp = { version = "0.12.0", default-features = false, features = [
+  "medium-ethernet",
+  "multicast",
+  "proto-dhcpv4",
+  "proto-dns",
+  "proto-ipv4",
+  "socket-dns",
+  "socket-icmp",
+  "socket-raw",
+  "socket-tcp",
+  "socket-udp",
+] }
+# for more networking protocol support see https://crates.io/crates/edge-net
+critical-section = "1.2.0"
+embassy-executor = { version = "0.7.0", features = ["task-arena-size-20480"] }
+embassy-time = { version = "0.4.0", features = ["generic-queue-8"] }
+esp-hal-embassy = { version = "0.8.0", features = ["esp32c3"] }
+esp-wifi = { version = "0.14.1", features = [
+  "builtin-scheduler",
+  "esp-alloc",
+  "esp32c3",
+  "wifi",
+] }
+heapless = { version = "0.8.0", default-features = false }
+static_cell = { version = "2.1.0", features = ["nightly"] }
+
+
+
+## Manually added
+esp-hal-smartled = { git = "https://github.com/esp-rs/esp-hal-community", features = [
+    "esp32c3",
+] }
+smart-leds = "*"
+embedded-hal = {version = "1.0.0"}
+veml7700 = "*"
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+
+[profile.release]
+codegen-units    = 1     # LLVM can perform better optimizations using a single thread
+debug            = 2
+debug-assertions = false
+incremental      = false
+lto              = 'fat'
+opt-level        = 's'
+overflow-checks  = false

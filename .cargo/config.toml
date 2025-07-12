@@ -1,14 +1,17 @@
-[build]
-target = "riscv32imc-esp-espidf"
-
-[target.riscv32imc-esp-espidf]
-linker = "ldproxy"
-runner = "espflash flash --monitor"
-rustflags = [ "--cfg",  "espidf_time64"] # Extending time_t for ESP IDF 5: https://github.com/esp-rs/rust/issues/110
-
-[unstable]
-build-std = ["std", "panic_abort"]
+[target.riscv32imc-unknown-none-elf]
+runner = "espflash flash --monitor --chip esp32c3"
 
 [env]
-MCU="esp32c3"
-ESP_IDF_VERSION = "v5.3.2"
+ESP_LOG="info"
+
+[build]
+rustflags = [
+  # Required to obtain backtraces (e.g. when using the "esp-backtrace" crate.)
+  # NOTE: May negatively impact performance of produced code
+  "-C", "force-frame-pointers",
+]
+
+target = "riscv32imc-unknown-none-elf"
+
+[unstable]
+build-std = ["alloc", "core"]
