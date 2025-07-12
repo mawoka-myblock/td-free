@@ -32,6 +32,21 @@ use crate::{
     EdgeError, LedType, WsHandler, WsHandlerError,
 };
 
+// Static for concurrency control and caching last result
+static BUSY: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+static LAST_DATA: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
+#[derive(Clone, Copy, Debug)]
+pub struct LastMeasurement {
+    pub td_value: f32,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub filament_inserted: bool,
+}
+
+pub static LAST_MEASUREMENT: Lazy<Mutex<Option<LastMeasurement>>> = Lazy::new(|| Mutex::new(None));
+
 static INDEX_HTML: &str = include_str!("index.html");
 static STYLE_CSS: &str = include_str!("style.css");
 static SCRIPT_JS: &str = include_str!("script.js");
@@ -1235,6 +1250,20 @@ async fn read_data_with_buffer(
             buffers.2.clear();
         }
 
+        // Update last measurement cache
+        {
+            let mut last_measurement = LAST_MEASUREMENT.lock().unwrap();
+            if let Some(meas) = last_measurement.as_mut() {
+                meas.filament_inserted = false;
+            } else {
+                *last_measurement = Some(LastMeasurement {
+                    td_value: 0.0,
+                    r: 0, g: 0, b: 0,
+                    filament_inserted: false,
+                });
+            }
+        }
+
         let wifi_stat = wifi_status.lock().unwrap();
         match *wifi_stat {
             WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
@@ -1342,6 +1371,18 @@ async fn read_data_with_buffer(
         apply_rgb_multipliers(r_corrected, g_corrected, b_corrected, final_median_lux, &*multipliers)
     };
 
+    // Update last measurement cache
+    {
+        let mut last_measurement = LAST_MEASUREMENT.lock().unwrap();
+        *last_measurement = Some(LastMeasurement {
+            td_value: adjusted_td_value,
+            r: r_final,
+            g: g_final,
+            b: b_final,
+            filament_inserted: true,
+        });
+    }
+
     // Create hex color string with corrected values
     let hex_color = format!("#{:02X}{:02X}{:02X}", r_final, g_final, b_final);
 
@@ -1363,6 +1404,3 @@ async fn read_data_with_buffer(
     Some(ws_message)
 }
 
-// Static for concurrency control and caching last result
-static BUSY: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
-static LAST_DATA: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));

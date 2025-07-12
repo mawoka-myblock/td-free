@@ -26,7 +26,7 @@ use embedded_io_async::{Read, Write};
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::task::block_on;
-use esp_idf_svc::hal::usb_serial::UsbSerialDriver;
+use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
 use esp_idf_svc::io::Write as ioWrite;
 use esp_idf_svc::ipv4::{
     self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
@@ -245,8 +245,8 @@ fn main() -> Result<(), ()> {
         }
     };
     
-    // Try to load RGB multipliers with error recovery
-    let saved_rgb_multipliers = match std::panic::catch_unwind(|| {
+    // Try to load RGB multipliers with error recovery and wrap in Arc<Mutex<>>
+    let saved_rgb_multipliers = Arc::new(Mutex::new(match std::panic::catch_unwind(|| {
         helpers::get_saved_rgb_multipliers(arced_nvs.as_ref().clone())
     }) {
         Ok(multipliers) => multipliers,
@@ -258,7 +258,7 @@ fn main() -> Result<(), ()> {
             }
             helpers::RGBMultipliers::default()
         }
-    };
+    }));
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
@@ -276,11 +276,38 @@ fn main() -> Result<(), ()> {
         &stack,
         ws2812.clone(),
         saved_algorithm,
-        saved_rgb_multipliers,
+        saved_rgb_multipliers.lock().unwrap().clone(),
     );
 
-    // Block on the server future
-    block_on(server_future).unwrap();
+    // --- Serial connection setup ---
+    let mut serial_driver = UsbSerialDriver::new(
+        peripherals.usb_serial,
+        peripherals.pins.gpio18,
+        peripherals.pins.gpio19,
+        &UsbSerialConfig::new(),
+    ).unwrap();
+    let mut exit_buffer = [0u8; 1];
+    serial_driver.read(&mut exit_buffer, 500).unwrap();
+    let serial_future = {
+        async move {
+            if exit_buffer.iter().any(|&x| x == b'e') {
+                drop(serial_driver);
+                log::info!("Logging reactivated!");
+                std::future::pending::<Result<(), anyhow::Error>>().await
+            } else {
+                //log::warn!("Logging deactivated from now on, this is last log message!");
+                //logger.set_target_level("*", log::LevelFilter::Off).unwrap();
+                serial_connection(
+                    &mut serial_driver,
+                ).await
+            }
+        }
+    };
+
+    // --- Run both server and serial connection ---
+    esp_idf_svc::hal::task::block_on(async {
+        futures::future::join(server_future, serial_future).await;
+    });
 
     Ok(())
 }
@@ -557,4 +584,92 @@ fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32
 
     log::info!("Baseline calculation: mean={:.2}, std={:.2}, median={:.2}", mean, std, median);
     median
+}
+
+/// Serial connection using median buffer results
+pub async fn serial_connection(
+    conn: &mut UsbSerialDriver<'static>,
+) -> Result<(), anyhow::Error> {
+    use std::sync::atomic::AtomicBool;
+    use embassy_sync::channel::Channel;
+    use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+    use crate::routes::LAST_MEASUREMENT;
+
+    let mut buffer = [0u8; 64];
+    let trigger_measurement = Arc::new(AtomicBool::new(false));
+    let trigger_clone = trigger_measurement.clone();
+    let channel = Channel::<NoopRawMutex, String, 1>::new();
+    let recv = channel.receiver();
+    let send = channel.sender();
+
+    let conn_loop = async {
+        loop {
+            if trigger_measurement.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(300).await;
+            } else {
+                embassy_time::Timer::after_millis(600).await;
+            }
+            let n = match conn.read(&mut buffer, 50) {
+                Ok(n) if n > 0 => Some(n),
+                _ => None,
+            };
+            if let Some(n) = n {
+                let received: &str = core::str::from_utf8(&buffer[..n]).unwrap_or("").trim();
+                match received {
+                    "connect" => {
+                        conn.write(b"ready\n", 100).unwrap();
+                    }
+                    "P" | "HF" => {
+                        trigger_measurement.store(true, Ordering::SeqCst);
+                        conn.write(b"connected to HF unlicensed\n", 100).unwrap();
+                    }
+                    "version" => {
+                        conn.write(b"result, TD1 Version: V1.0.4, StatusScreen Version: V1.0.4,Comms Version: V1.0.4, startUp Version: V1.0.4\n", 100).unwrap();
+                    }
+                    _ => {}
+                }
+                conn.flush().unwrap();
+            } else if trigger_measurement.load(Ordering::SeqCst)
+                && let Ok(msg) = recv.try_receive()
+            {
+                conn.write(msg.as_bytes(), 500).unwrap();
+                conn.flush().unwrap();
+                recv.clear();
+            }
+            continue;
+        }
+    };
+
+    let measurement_loop = async {
+        loop {
+            if !trigger_clone.load(Ordering::SeqCst) {
+                embassy_time::Timer::after_millis(500).await;
+                continue;
+            }
+
+            let last_measurement = LAST_MEASUREMENT.lock().unwrap();
+            if let Some(measurement) = &*last_measurement {
+
+
+                if measurement.filament_inserted {
+                    let message = format!(
+                        "{},,,,{:.1},{:02X}{:02X}{:02X}\n",
+                        helpers::generate_random_11_digit_number(),
+                        measurement.td_value,
+                        measurement.r,
+                        measurement.g,
+                        measurement.b
+                    );
+                    send.send(message).await;
+                }
+            }
+
+            // The frontend is responsible for polling and updating the values.
+            // We just need to wait and check periodically.
+            embassy_time::Timer::after_millis(300).await;
+        }
+    };
+
+    embassy_futures::join::join(measurement_loop, conn_loop).await;
+    Ok(())
 }
