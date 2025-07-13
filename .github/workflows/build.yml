@@ -3,9 +3,7 @@ name: Build for commit
 on:
   push:
   workflow_dispatch:
-  
-    
-    
+
 env:
   rust_toolchain: stable
 
@@ -23,7 +21,7 @@ jobs:
       - name: Setup | Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-12-01
+          toolchain: nightly-2025-06-28
           components: rustfmt, clippy
       - name: Install Rust for Xtensa
         uses: esp-rs/xtensa-toolchain@v1.5
@@ -32,11 +30,10 @@ jobs:
           version: "latest"
           ldproxy: true
       - name: Setup | Std
-        run: rustup component add rust-src --toolchain nightly-2024-12-01
+        run: rustup component add rust-src --toolchain nightly-2025-06-28
       - name: Setup | Checkout
         uses: actions/checkout@v4
       - uses: Swatinem/rust-cache@v2
-
 
       - name: Extract Data
         id: extract_version
@@ -51,7 +48,7 @@ jobs:
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
-        run: cargo binstall espflash --no-confirm --force
+        run: cargo binstall espflash@=3.3.0 --no-confirm --force
 
       - name: Build | Compile (production)
         run: |
@@ -78,6 +75,3 @@ jobs:
         run: |
           $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
           $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest.bin
-
-
-      

@@ -4,7 +4,7 @@ on:
   release:
     types:
       - published
-    
+
 env:
   rust_toolchain: stable
 
@@ -20,7 +20,6 @@ jobs:
       - name: Setup | Checkout
         uses: actions/checkout@v4
 
-        
       - name: Extract version from tag
         id: extract_version
         run: |
@@ -42,12 +41,11 @@ jobs:
       - name: Setup | Rust
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2024-12-01
+          toolchain: nightly-2025-06-28
           components: rustfmt, clippy
 
       - name: Setup | Std
-        run: rustup component add rust-src --toolchain nightly-2024-12-01
-
+        run: rustup component add rust-src --toolchain nightly-2025-06-28
 
       - uses: Swatinem/rust-cache@v2
 
@@ -60,12 +58,12 @@ jobs:
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
-        run: cargo binstall espflash --no-confirm
+        run: cargo binstall espflash@=3.3.0 --no-confirm
       - name: Cache Cargo
         uses: Swatinem/rust-cache@v2
 
       # - name: Setup | ldproxy
-      #   run: cargo install ldproxy   
+      #   run: cargo install ldproxy
       - name: Build | Compile (production)
         run: |
           BASE_VERSION="${{ github.ref_name }}"
@@ -81,6 +79,3 @@ jobs:
         with:
           append_body: true
           files: td-free.bin
-      
-
-      
