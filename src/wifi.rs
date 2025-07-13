@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::bail;
+use embassy_time::Duration;
 use esp_idf_svc::{
     nvs::{EspNvs, EspNvsPartition, NvsDefault},
     wifi::{
@@ -13,11 +14,10 @@ use esp_idf_svc::{
         Configuration as WifiConfiguration, EspWifi,
     },
 };
-use embassy_time::Duration;
-use log::{info, warn, error, debug};
+use log::{debug, error, info, warn};
 
-use crate::led::set_led;
 use crate::LedType;
+use crate::led::set_led;
 
 const MAX_CONNECTION_ATTEMPTS: u8 = 5;
 const CONNECTION_TIMEOUT_MS: u64 = 5000; // 5 seconds
@@ -68,15 +68,15 @@ async fn wifi_client_with_retries(
     wifi: &mut AsyncWifi<EspWifi<'static>>,
 ) -> anyhow::Result<()> {
     for attempt in 1..=MAX_CONNECTION_ATTEMPTS {
-        info!("WiFi connection attempt {} of {}", attempt, MAX_CONNECTION_ATTEMPTS);
+        info!("WiFi connection attempt {attempt} of {MAX_CONNECTION_ATTEMPTS}");
 
         match wifi_client_single_attempt(ssid, pass, wifi).await {
             Ok(_) => {
-                info!("WiFi connected successfully on attempt {}", attempt);
+                info!("WiFi connected successfully on attempt {attempt}");
                 return Ok(());
             }
             Err(e) => {
-                error!("WiFi connection attempt {} failed: {:?}", attempt, e);
+                error!("WiFi connection attempt {attempt} failed: {e:?}");
 
                 if attempt < MAX_CONNECTION_ATTEMPTS {
                     // Stop and restart WiFi between attempts to reset state
@@ -91,7 +91,10 @@ async fn wifi_client_with_retries(
         }
     }
 
-    bail!("Failed to connect after {} attempts", MAX_CONNECTION_ATTEMPTS)
+    bail!(
+        "Failed to connect after {} attempts",
+        MAX_CONNECTION_ATTEMPTS
+    )
 }
 
 async fn wifi_client_single_attempt(
@@ -141,7 +144,7 @@ async fn wifi_client_single_attempt(
         // Determine the best auth method based on scan results
         let _ = match ours.auth_method {
             Some(auth) => {
-                info!("Detected auth method: {:?}", auth);
+                info!("Detected auth method: {auth:?}");
                 auth
             }
             None => {
@@ -152,13 +155,13 @@ async fn wifi_client_single_attempt(
 
         (Some(ours.channel), ours.signal_strength)
     } else {
-        warn!(
-            "Configured access point {} not found during scanning. Available networks:",
-            ssid
-        );
+        warn!("Configured access point {ssid} not found during scanning. Available networks:");
 
         for ap in &ap_infos {
-            debug!("  - {} (channel {}, {} dBm)", ap.ssid, ap.channel, ap.signal_strength);
+            debug!(
+                "  - {} (channel {}, {} dBm)",
+                ap.ssid, ap.channel, ap.signal_strength
+            );
         }
 
         // Still attempt connection with unknown channel
@@ -169,32 +172,33 @@ async fn wifi_client_single_attempt(
     wifi.set_configuration(&WifiConfiguration::Client(ClientConfiguration {
         ssid: ssid
             .try_into()
-            .map_err(|e| anyhow::anyhow!("Could not parse SSID '{}': {:?}", ssid, e))?,
+            .map_err(|e| anyhow::anyhow!("Could not parse SSID '{ssid}': {e:?}"))?,
         password: pass
             .try_into()
-            .map_err(|e| anyhow::anyhow!("Could not parse password: {:?}", e))?,
+            .map_err(|e| anyhow::anyhow!("Could not parse password: {e:?}"))?,
         channel,
         auth_method,
         ..Default::default()
     }))?;
 
-    info!("Connecting to WiFi network '{}'...", ssid);
+    info!("Connecting to WiFi network '{ssid}'...");
 
     // Connect with timeout
     let connect_result = embassy_futures::select::select(
         wifi.connect(),
-        embassy_time::Timer::after_millis(CONNECTION_TIMEOUT_MS)
-    ).await;
+        embassy_time::Timer::after_millis(CONNECTION_TIMEOUT_MS),
+    )
+    .await;
 
     match connect_result {
         embassy_futures::select::Either::First(Ok(_)) => {
             info!("WiFi connect command successful");
         }
         embassy_futures::select::Either::First(Err(e)) => {
-            bail!("WiFi connect failed: {:?}", e);
+            bail!("WiFi connect failed: {e:?}");
         }
         embassy_futures::select::Either::Second(_) => {
-            bail!("WiFi connect timed out after {}ms", CONNECTION_TIMEOUT_MS);
+            bail!("WiFi connect timed out after {CONNECTION_TIMEOUT_MS}ms");
         }
     }
 
@@ -203,18 +207,19 @@ async fn wifi_client_single_attempt(
     // Wait for network interface with timeout
     let netif_result = embassy_futures::select::select(
         wifi.wait_netif_up(),
-        embassy_time::Timer::after_millis(CONNECTION_TIMEOUT_MS)
-    ).await;
+        embassy_time::Timer::after_millis(CONNECTION_TIMEOUT_MS),
+    )
+    .await;
 
     match netif_result {
         embassy_futures::select::Either::First(Ok(_)) => {
             info!("Network interface is up");
         }
         embassy_futures::select::Either::First(Err(e)) => {
-            bail!("Network interface failed to come up: {:?}", e);
+            bail!("Network interface failed to come up: {e:?}");
         }
         embassy_futures::select::Either::Second(_) => {
-            bail!("Network interface timed out after {}ms", CONNECTION_TIMEOUT_MS);
+            bail!("Network interface timed out after {CONNECTION_TIMEOUT_MS}ms");
         }
     }
 
@@ -225,20 +230,22 @@ async fn wifi_client_single_attempt(
         bail!("Failed to obtain IP address from DHCP");
     }
 
-    info!("WiFi DHCP info: {:?}", ip_info);
-    info!("Successfully connected to WiFi network '{}'", ssid);
+    info!("WiFi DHCP info: {ip_info:?}");
+    info!("Successfully connected to WiFi network '{ssid}'");
 
     Ok(())
 }
 
-async fn scan_with_retries(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<Vec<esp_idf_svc::wifi::AccessPointInfo>> {
+async fn scan_with_retries(
+    wifi: &mut AsyncWifi<EspWifi<'static>>,
+) -> anyhow::Result<Vec<esp_idf_svc::wifi::AccessPointInfo>> {
     for attempt in 1..=SCAN_RETRY_COUNT {
-        debug!("WiFi scan attempt {} of {}", attempt, SCAN_RETRY_COUNT);
+        debug!("WiFi scan attempt {attempt} of {SCAN_RETRY_COUNT}");
 
         match wifi.scan().await {
             Ok(ap_infos) => {
                 if ap_infos.is_empty() {
-                    warn!("Scan attempt {} returned no networks", attempt);
+                    warn!("Scan attempt {attempt} returned no networks");
                     if attempt < SCAN_RETRY_COUNT {
                         embassy_time::Timer::after_millis(1000).await;
                         continue;
@@ -249,7 +256,7 @@ async fn scan_with_retries(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Re
                 }
             }
             Err(e) => {
-                warn!("Scan attempt {} failed: {:?}", attempt, e);
+                warn!("Scan attempt {attempt} failed: {e:?}");
                 if attempt < SCAN_RETRY_COUNT {
                     embassy_time::Timer::after_millis(1000).await;
                     continue;
@@ -258,7 +265,7 @@ async fn scan_with_retries(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Re
         }
     }
 
-    bail!("Failed to scan networks after {} attempts", SCAN_RETRY_COUNT)
+    bail!("Failed to scan networks after {SCAN_RETRY_COUNT} attempts")
 }
 
 #[derive(Debug, PartialEq)]
@@ -284,7 +291,7 @@ pub async fn wifi_setup(
     let nvs = match EspNvs::new(nvs, "wifi", true) {
         Ok(nvs) => nvs,
         Err(e) => {
-            error!("NVS read error: {:?}, starting hotspot", e);
+            error!("NVS read error: {e:?}, starting hotspot");
             let mut wifi_guard = wifi.lock().unwrap();
             let ip = wifi_hotspot(&mut wifi_guard).await?;
             set_led(ws2812, 255, 0, 255);
@@ -312,7 +319,7 @@ pub async fn wifi_setup(
     let ssid = wifi_ssid.unwrap();
     let password = wifi_password.unwrap();
 
-    info!("Attempting to connect to WiFi network: '{}'", ssid);
+    info!("Attempting to connect to WiFi network: '{ssid}'");
 
     let client_result = {
         let mut wifi_guard = wifi.lock().unwrap();
@@ -321,16 +328,20 @@ pub async fn wifi_setup(
 
     match client_result {
         Ok(_) => {
-            info!("Successfully connected to WiFi network '{}'", ssid);
+            info!("Successfully connected to WiFi network '{ssid}'");
             set_led(ws2812.clone(), 0, 255, 0); // Green for connected
             let mut w_status = wifi_status.lock().unwrap();
             *w_status = WifiEnum::Connected;
 
             // Return credentials so caller can spawn maintainer task
-            Ok((WifiEnum::Connected, None, Some((ssid.to_string(), password.to_string()))))
+            Ok((
+                WifiEnum::Connected,
+                None,
+                Some((ssid.to_string(), password.to_string())),
+            ))
         }
         Err(e) => {
-            error!("WiFi client connection failed after all attempts: {:?}", e);
+            error!("WiFi client connection failed after all attempts: {e:?}");
             warn!("Falling back to hotspot mode");
 
             // Stop WiFi before switching to hotspot
@@ -401,17 +412,21 @@ async fn wifi_hotspot(wifi: &mut AsyncWifi<EspWifi<'static>>) -> anyhow::Result<
     // Wait for interface with timeout
     let netif_result = embassy_futures::select::select(
         wifi.wait_netif_up(),
-        embassy_time::Timer::after_millis(10000) // 10 second timeout for hotspot
-    ).await;
+        embassy_time::Timer::after_millis(10000), // 10 second timeout for hotspot
+    )
+    .await;
 
     match netif_result {
         embassy_futures::select::Either::First(Ok(_)) => {
             let ipv4_address = wifi.wifi().ap_netif().get_ip_info()?;
-            info!("WiFi hotspot started successfully at IP: {}", ipv4_address.ip);
+            info!(
+                "WiFi hotspot started successfully at IP: {}",
+                ipv4_address.ip
+            );
             Ok(ipv4_address.ip)
         }
         embassy_futures::select::Either::First(Err(e)) => {
-            bail!("Hotspot interface failed to come up: {:?}", e);
+            bail!("Hotspot interface failed to come up: {e:?}");
         }
         embassy_futures::select::Either::Second(_) => {
             bail!("Hotspot interface timed out");
@@ -427,18 +442,14 @@ pub async fn wifi_thread(
     wifi_status: Arc<Mutex<WifiEnum>>,
 ) {
     // Initial setup: connect or start hotspot
-    let (wifi_mode, _hotspot_ip, creds) = match wifi_setup(
-        wifi.clone(),
-        nvs,
-        ws2812.clone(),
-        wifi_status.clone(),
-    ).await {
-        Ok(res) => res,
-        Err(e) => {
-            error!("WiFi setup failed: {:?}", e);
-            return;
-        }
-    };
+    let (wifi_mode, _hotspot_ip, creds) =
+        match wifi_setup(wifi.clone(), nvs, ws2812.clone(), wifi_status.clone()).await {
+            Ok(res) => res,
+            Err(e) => {
+                error!("WiFi setup failed: {e:?}");
+                return;
+            }
+        };
 
     // If connected, spawn the maintainer loop
     if let (WifiEnum::Connected, Some((ssid, password))) = (wifi_mode, creds) {
@@ -454,7 +465,8 @@ pub async fn wifi_thread(
                     password,
                     ws2812_clone,
                     wifi_status_clone,
-                ).await;
+                )
+                .await;
             });
         });
     }

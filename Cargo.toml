@@ -2,9 +2,9 @@
 name = "td-free-rs"
 version = "0.1.0"
 authors = ["Mawoka <git@mawoka.eu>"]
-edition = "2021"
+edition = "2024"
 resolver = "2"
-rust-version = "1.84"
+rust-version = "1.87"
 
 [[bin]]
 name = "td-free-rs"
@@ -23,7 +23,11 @@ opt-level = "z"
 
 [dependencies]
 log = "0.4"
-esp-idf-svc = { version = "0.51", features= ["experimental", "embassy-time-driver", "critical-section"] }
+esp-idf-svc = { version = "0.51", features = [
+    "experimental",
+    "embassy-time-driver",
+    "critical-section",
+] }
 embedded-hal = "1"
 heapless = "0.8"
 edge-http = "0.5.1"
@@ -38,19 +42,19 @@ veml7700 = "0.2.0"
 embassy-time = { version = "0.4", features = ["log", "generic-queue-8"] }
 embassy-futures = "0.1"
 embassy-sync = "0.6"
-async-std = {version = "1.13"}
+async-std = { version = "1.13" }
 smart-leds = "*"
 ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
-embedded-svc = {version = "*"}
-serde = {version = "*"}
-serde_json = {version = "*"}
+embedded-svc = { version = "*" }
+serde = { version = "*" }
+serde_json = { version = "*" }
 libm = "0.2"
 nb = "1.1"
 futures = "0.3"
 once_cell = "1.19"
 
 [build-dependencies]
-embuild = {version = "0.33", features = ["espidf"]}
+embuild = { version = "0.33", features = ["espidf"] }
 vergen-gix = { version = "1", features = ["build", "rustc"] }
 anyhow = "1"
 

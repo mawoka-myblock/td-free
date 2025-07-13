@@ -1,3 +1,9 @@
+pub mod baseline_readings;
+pub mod median_buffer;
+pub mod readings;
+pub mod rgb;
+pub mod serial;
+
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -19,10 +25,10 @@ pub struct RGBMultipliers {
     pub green: f32,
     pub blue: f32,
     pub brightness: f32,
-    pub td_reference: f32,  // TD value at calibration time
-    pub reference_r: u8,    // Reference red value (0-255)
-    pub reference_g: u8,    // Reference green value (0-255)
-    pub reference_b: u8,    // Reference blue value (0-255)
+    pub td_reference: f32, // TD value at calibration time
+    pub reference_r: u8,   // Reference red value (0-255)
+    pub reference_g: u8,   // Reference green value (0-255)
+    pub reference_b: u8,   // Reference blue value (0-255)
 }
 
 impl Default for RGBMultipliers {
@@ -32,26 +38,26 @@ impl Default for RGBMultipliers {
             green: 1.0,
             blue: 1.0,
             brightness: 1.0,
-            td_reference: 50.0,  // Default to 50% transmission
-            reference_r: 127,    // Default to 50% grey
-            reference_g: 127,    // Default to 50% grey
-            reference_b: 127,    // Default to 50% grey
+            td_reference: 50.0, // Default to 50% transmission
+            reference_r: 127,   // Default to 50% grey
+            reference_g: 127,   // Default to 50% grey
+            reference_b: 127,   // Default to 50% grey
         }
     }
 }
 
 use esp_idf_svc::{
     hal::{
-        gpio::{Gpio10, Gpio5, Gpio6, Gpio8, PinDriver, InputOutput, Pull},
-        i2c::{I2cConfig, I2cDriver, I2C0},
         delay::Ets,
+        gpio::{Gpio5, Gpio6, Gpio8, Gpio10, InputOutput, PinDriver, Pull},
+        i2c::{I2C0, I2cConfig, I2cDriver},
     },
     nvs::{EspNvs, EspNvsPartition, NvsDefault},
     sys::esp_random,
 };
 use veml7700::Veml7700;
 
-use crate::{led, veml3328, LedType};
+use crate::{LedType, led, veml3328};
 use esp_idf_svc::hal::prelude::*;
 
 // Simplified bit-bang I2C implementation using a different approach
@@ -96,7 +102,9 @@ impl embedded_hal::i2c::Error for SimpleBitBangError {
     fn kind(&self) -> embedded_hal::i2c::ErrorKind {
         match self {
             SimpleBitBangError::GpioError => embedded_hal::i2c::ErrorKind::Bus,
-            SimpleBitBangError::Nack => embedded_hal::i2c::ErrorKind::NoAcknowledge(embedded_hal::i2c::NoAcknowledgeSource::Unknown),
+            SimpleBitBangError::Nack => embedded_hal::i2c::ErrorKind::NoAcknowledge(
+                embedded_hal::i2c::NoAcknowledgeSource::Unknown,
+            ),
             SimpleBitBangError::Timeout => embedded_hal::i2c::ErrorKind::ArbitrationLoss,
         }
     }
@@ -108,11 +116,11 @@ impl embedded_hal::i2c::ErrorType for SimpleBitBangI2cInstance {
 
 impl SimpleBitBangI2cInstance {
     // Use timing based on VEML3328 datasheet - Standard Mode requirements
-    const DELAY_LOW_US: u32 = 5;    // t(LOW) >= 4.7μs
-    const DELAY_HIGH_US: u32 = 5;   // t(HIGH) >= 4.0μs
-    const DELAY_SETUP_US: u32 = 1;  // t(SUDAT) >= 250ns
-    const DELAY_HOLD_US: u32 = 4;   // t(HDDAT) <= 3450ns
-    const DELAY_BUF_US: u32 = 5;    // t(BUF) >= 4.7μs
+    const DELAY_LOW_US: u32 = 5; // t(LOW) >= 4.7μs
+    const DELAY_HIGH_US: u32 = 5; // t(HIGH) >= 4.0μs
+    const DELAY_SETUP_US: u32 = 1; // t(SUDAT) >= 250ns
+    const DELAY_HOLD_US: u32 = 4; // t(HDDAT) <= 3450ns
+    const DELAY_BUF_US: u32 = 5; // t(BUF) >= 4.7μs
 
     fn delay_low(&self) {
         Ets::delay_us(Self::DELAY_LOW_US);
@@ -137,7 +145,8 @@ impl SimpleBitBangI2cInstance {
     // Simplified approach: use the InputOutput pins directly without mode conversion
     fn set_sda_high(&mut self) -> Result<(), SimpleBitBangError> {
         let mut sda = self.sda.lock().unwrap();
-        sda.set_pull(Pull::Up).map_err(|_| SimpleBitBangError::GpioError)?;
+        sda.set_pull(Pull::Up)
+            .map_err(|_| SimpleBitBangError::GpioError)?;
         // For open-drain I2C, high is achieved by not driving (letting pull-up work)
         // We'll use set_high() to achieve this on InputOutput pins
         sda.set_high().map_err(|_| SimpleBitBangError::GpioError)?;
@@ -152,7 +161,8 @@ impl SimpleBitBangI2cInstance {
 
     fn set_scl_high(&mut self) -> Result<(), SimpleBitBangError> {
         let mut scl = self.scl.lock().unwrap();
-        scl.set_pull(Pull::Up).map_err(|_| SimpleBitBangError::GpioError)?;
+        scl.set_pull(Pull::Up)
+            .map_err(|_| SimpleBitBangError::GpioError)?;
         scl.set_high().map_err(|_| SimpleBitBangError::GpioError)?;
 
         // Wait for clock stretching (if any device is holding SCL low)
@@ -241,7 +251,7 @@ impl SimpleBitBangI2cInstance {
     }
 
     fn write_byte(&mut self, byte: u8) -> Result<bool, SimpleBitBangError> {
-        log::debug!("Writing I2C byte: 0x{:02X} (binary: {:08b})", byte, byte);
+        log::debug!("Writing I2C byte: 0x{byte:02X} (binary: {byte:08b})");
         // Send 8 bits, MSB first
         for i in 0..8 {
             let bit = (byte & (0x80 >> i)) != 0;
@@ -251,7 +261,11 @@ impl SimpleBitBangI2cInstance {
 
         // Read ACK/NACK
         let ack = !self.read_bit()?; // ACK is low, NACK is high
-        log::debug!("Received ACK: {} ({})", ack, if ack { "ACK" } else { "NACK" });
+        log::debug!(
+            "Received ACK: {} ({})",
+            ack,
+            if ack { "ACK" } else { "NACK" }
+        );
         Ok(ack)
     }
 
@@ -267,7 +281,7 @@ impl SimpleBitBangI2cInstance {
 
         // Send ACK/NACK
         self.write_bit(!send_ack)?; // ACK is low, NACK is high
-        log::debug!("Read I2C byte: 0x{:02X} (binary: {:08b}), sent ACK: {}", byte, byte, send_ack);
+        log::debug!("Read I2C byte: 0x{byte:02X} (binary: {byte:08b}), sent ACK: {send_ack}");
 
         Ok(byte)
     }
@@ -279,16 +293,20 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             return Ok(());
         }
 
-        log::debug!("I2C read from address 0x{:02X}, {} bytes", address, read.len());
+        log::debug!(
+            "I2C read from address 0x{:02X}, {} bytes",
+            address,
+            read.len()
+        );
 
         self.start_condition()?;
 
         // Send address with read bit (1)
         let addr_byte = (address << 1) | 0x01;
-        log::debug!("Sending address byte for read: 0x{:02X}", addr_byte);
+        log::debug!("Sending address byte for read: 0x{addr_byte:02X}");
         if !self.write_byte(addr_byte)? {
             self.stop_condition()?;
-            log::warn!("VEML3328 I2C NACK on address read: 0x{:02X}", address);
+            log::warn!("VEML3328 I2C NACK on address read: 0x{address:02X}");
             return Err(SimpleBitBangError::Nack);
         }
 
@@ -300,7 +318,7 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         }
 
         self.stop_condition()?;
-        log::debug!("I2C read completed: {:?}", read);
+        log::debug!("I2C read completed: {read:?}");
         Ok(())
     }
 
@@ -309,16 +327,21 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             return Ok(());
         }
 
-        log::debug!("I2C write to address 0x{:02X}, {} bytes: {:?}", address, write.len(), write);
+        log::debug!(
+            "I2C write to address 0x{:02X}, {} bytes: {:?}",
+            address,
+            write.len(),
+            write
+        );
 
         self.start_condition()?;
 
         // Send address with write bit (0)
         let addr_byte = (address << 1) & 0xFE;
-        log::debug!("Sending address byte for write: 0x{:02X}", addr_byte);
+        log::debug!("Sending address byte for write: 0x{addr_byte:02X}");
         if !self.write_byte(addr_byte)? {
             self.stop_condition()?;
-            log::warn!("VEML3328 I2C NACK on address write: 0x{:02X}", address);
+            log::warn!("VEML3328 I2C NACK on address write: 0x{address:02X}");
             return Err(SimpleBitBangError::Nack);
         }
 
@@ -326,7 +349,7 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         for &byte in write {
             if !self.write_byte(byte)? {
                 self.stop_condition()?;
-                log::warn!("VEML3328 I2C NACK on data write: 0x{:02X}", byte);
+                log::warn!("VEML3328 I2C NACK on data write: 0x{byte:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
         }
@@ -336,9 +359,19 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         Ok(())
     }
 
-    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
-        log::debug!("I2C write_read to address 0x{:02X}, write {} bytes: {:?}, read {} bytes",
-                   address, write.len(), write, read.len());
+    fn write_read(
+        &mut self,
+        address: u8,
+        write: &[u8],
+        read: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        log::debug!(
+            "I2C write_read to address 0x{:02X}, write {} bytes: {:?}, read {} bytes",
+            address,
+            write.len(),
+            write,
+            read.len()
+        );
 
         // Write phase
         if !write.is_empty() {
@@ -346,10 +379,10 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
 
             // Send address with write bit (0)
             let addr_byte = (address << 1) & 0xFE;
-            log::debug!("Sending address byte for write: 0x{:02X}", addr_byte);
+            log::debug!("Sending address byte for write: 0x{addr_byte:02X}");
             if !self.write_byte(addr_byte)? {
                 self.stop_condition()?;
-                log::warn!("VEML3328 I2C NACK on address write: 0x{:02X}", address);
+                log::warn!("VEML3328 I2C NACK on address write: 0x{address:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
 
@@ -357,7 +390,7 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             for &byte in write {
                 if !self.write_byte(byte)? {
                     self.stop_condition()?;
-                    log::warn!("VEML3328 I2C NACK on data write: 0x{:02X}", byte);
+                    log::warn!("VEML3328 I2C NACK on data write: 0x{byte:02X}");
                     return Err(SimpleBitBangError::Nack);
                 }
             }
@@ -369,10 +402,10 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
 
             // Send address with read bit (1)
             let addr_byte = (address << 1) | 0x01;
-            log::debug!("Sending address byte for read: 0x{:02X}", addr_byte);
+            log::debug!("Sending address byte for read: 0x{addr_byte:02X}");
             if !self.write_byte(addr_byte)? {
                 self.stop_condition()?;
-                log::warn!("VEML3328 I2C NACK on address read: 0x{:02X}", address);
+                log::warn!("VEML3328 I2C NACK on address read: 0x{address:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
 
@@ -385,7 +418,7 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         }
 
         self.stop_condition()?;
-        log::debug!("I2C write_read completed: read data: {:?}", read);
+        log::debug!("I2C write_read completed: read data: {read:?}");
         Ok(())
     }
 
@@ -437,19 +470,30 @@ impl embedded_hal::i2c::ErrorType for HardwareI2cInstance {
 
 impl embedded_hal::i2c::I2c for HardwareI2cInstance {
     fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
-        self.driver.lock().unwrap()
+        self.driver
+            .lock()
+            .unwrap()
             .read(address, read, 1000)
             .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 
     fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
-        self.driver.lock().unwrap()
+        self.driver
+            .lock()
+            .unwrap()
             .write(address, write, 1000)
             .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
 
-    fn write_read(&mut self, address: u8, write: &[u8], read: &mut [u8]) -> Result<(), Self::Error> {
-        self.driver.lock().unwrap()
+    fn write_read(
+        &mut self,
+        address: u8,
+        write: &[u8],
+        read: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        self.driver
+            .lock()
+            .unwrap()
             .write_read(address, write, read, 1000)
             .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
@@ -459,7 +503,9 @@ impl embedded_hal::i2c::I2c for HardwareI2cInstance {
         address: u8,
         operations: &mut [embedded_hal::i2c::Operation<'_>],
     ) -> Result<(), Self::Error> {
-        self.driver.lock().unwrap()
+        self.driver
+            .lock()
+            .unwrap()
             .transaction(address, operations, 1000)
             .map_err(esp_idf_svc::hal::i2c::I2cError::other)
     }
@@ -630,9 +676,17 @@ pub fn save_rgb_multipliers(
     nvs.set_str("ref_g", &multipliers.reference_g.to_string())?;
     nvs.set_str("ref_b", &multipliers.reference_b.to_string())?;
 
-    log::info!("Saved RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}, Ref_RGB=({},{},{})", 
-              multipliers.red, multipliers.green, multipliers.blue, multipliers.brightness, multipliers.td_reference,
-              multipliers.reference_r, multipliers.reference_g, multipliers.reference_b);
+    log::info!(
+        "Saved RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}, Ref_RGB=({},{},{})",
+        multipliers.red,
+        multipliers.green,
+        multipliers.blue,
+        multipliers.brightness,
+        multipliers.td_reference,
+        multipliers.reference_r,
+        multipliers.reference_g,
+        multipliers.reference_b
+    );
     Ok(())
 }
 
@@ -651,9 +705,9 @@ pub fn clear_rgb_multipliers_nvs(nvs: EspNvsPartition<NvsDefault>) -> anyhow::Re
             let _ = nvs_handle.remove("ref_b");
             info!("RGB multipliers NVS data cleared");
             Ok(())
-        },
+        }
         Err(e) => {
-            bail!("Failed to open RGB multipliers NVS for clearing: {:?}", e);
+            bail!("Failed to open RGB multipliers NVS for clearing: {e:?}");
         }
     }
 }
@@ -670,16 +724,20 @@ pub fn generate_random_11_digit_number() -> u64 {
     }
 }
 
-pub fn save_spoolman_data(url: &str, field_name: &str,nvs: EspNvsPartition<NvsDefault>) -> anyhow::Result<()> {
+pub fn save_spoolman_data(
+    url: &str,
+    field_name: &str,
+    nvs: EspNvsPartition<NvsDefault>,
+) -> anyhow::Result<()> {
     let mut nvs = match EspNvs::new(nvs, "prefs", true) {
         Ok(nvs) => nvs,
         Err(_) => {
             bail!("NVS failed");
         }
     };
-    info!("Saving Spoolman: {}", &url);
-    nvs.set_str("spool_url", url)?;  // Changed from "spoolman_url" (11 chars) to "spool_url" (9 chars)
-    nvs.set_str("spool_field", field_name)?;  // Changed from "spoolman_field_name" (18 chars) to "spool_field" (11 chars)
+    info!("Saving Spoolman: {url}");
+    nvs.set_str("spool_url", url)?; // Changed from "spoolman_url" (11 chars) to "spool_url" (9 chars)
+    nvs.set_str("spool_field", field_name)?; // Changed from "spoolman_field_name" (18 chars) to "spool_field" (11 chars)
     Ok(())
 }
 
@@ -695,12 +753,12 @@ pub fn read_spoolman_data(nvs: EspNvsPartition<NvsDefault>) -> (Option<String>, 
 
     let mut spoolman_url_buf = vec![0; 256];
     let url = nvs
-        .get_str("spool_url", &mut spoolman_url_buf)  // Changed from "spoolman_url"
+        .get_str("spool_url", &mut spoolman_url_buf) // Changed from "spoolman_url"
         .unwrap_or(None)
         .map(|s| s.to_string());
     let mut spoolman_field_name_buf = vec![0; 256];
     let field_name = nvs
-        .get_str("spool_field", &mut spoolman_field_name_buf)  // Changed from "spoolman_field_name"
+        .get_str("spool_field", &mut spoolman_field_name_buf) // Changed from "spoolman_field_name"
         .unwrap_or(None)
         .map(|s| s.to_string());
     (url, field_name)
@@ -718,21 +776,19 @@ pub fn initialize_veml(
     pins: Pins,
     ws2812_old: Arc<Mutex<LedType>>,
     ws2812_new: Arc<Mutex<LedType>>,
-) -> (Arc<Mutex<Veml7700<HardwareI2cInstance>>>, Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>, bool) {
+) -> I2cInitRespone {
     // Use hardware I2C for VEML7700 on primary pins
     let hw_config = I2cConfig::new()
         .baudrate(KiloHertz::from(100).into())
         .timeout(Duration::from_millis(100).into());
 
-    let hw_i2c = I2cDriver::new(
-        pins.i2c,
-        pins.sda1,
-        pins.scl1,
-        &hw_config,
-    );
+    let hw_i2c = I2cDriver::new(pins.i2c, pins.sda1, pins.scl1, &hw_config);
 
     if hw_i2c.is_err() {
-        info!("Primary I2C failed: {:?}, trying alt pins for both", hw_i2c.err());
+        info!(
+            "Primary I2C failed: {:?}, trying alt pins for both",
+            hw_i2c.err()
+        );
         return init_alt_i2c_both(pins.sda2, pins.scl2, ws2812_old, ws2812_new);
     }
 
@@ -744,7 +800,10 @@ pub fn initialize_veml(
 
     let veml_enable_res = veml_temp.enable();
     if veml_enable_res.is_err() {
-        info!("VEML7700 enable failed: {:?}, trying alt pins", veml_enable_res.err());
+        info!(
+            "VEML7700 enable failed: {:?}, trying alt pins",
+            veml_enable_res.err()
+        );
         return init_alt_i2c_both(pins.sda2, pins.scl2, ws2812_old, ws2812_new);
     }
 
@@ -773,35 +832,42 @@ pub fn initialize_veml(
             // Try to read device ID to verify communication
             match veml_rgb_temp.read_device_id() {
                 Ok(id) => {
-                    log::info!("VEML3328 device ID: 0x{:04X}", id);
+                    log::info!("VEML3328 device ID: 0x{id:04X}");
                     if id == 0x28 {
                         log::info!("VEML3328 device ID matches expected value!");
                     } else if id == 0x0000 {
                         log::error!("VEML3328 device ID is 0x0000 - no communication!");
                     } else {
-                        log::warn!("Unexpected device ID! Expected 0x28, got 0x{:04X}", id);
+                        log::warn!("Unexpected device ID! Expected 0x28, got 0x{id:04X}");
                     }
-                },
-                Err(e) => log::warn!("Could not read VEML3328 device ID: {:?}", e),
+                }
+                Err(e) => log::warn!("Could not read VEML3328 device ID: {e:?}"),
             }
-        },
+        }
         Err(e) => {
-            log::error!("Could not enable VEML3328 RGB sensor: {:?}", e);
+            log::error!("Could not enable VEML3328 RGB sensor: {e:?}");
         }
     }
 
     let veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>> = Arc::new(Mutex::new(veml_temp));
-    let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> = Arc::new(Mutex::new(veml_rgb_temp));
+    let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> =
+        Arc::new(Mutex::new(veml_rgb_temp));
 
     (veml, veml_rgb, false)
 }
+
+pub type I2cInitRespone = (
+    Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    bool,
+);
 
 fn init_alt_i2c_both(
     sda: Gpio8,
     scl: Gpio10,
     ws2812_old: Arc<Mutex<LedType>>,
     ws2812_new: Arc<Mutex<LedType>>,
-) -> (Arc<Mutex<Veml7700<HardwareI2cInstance>>>, Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>, bool) {
+) -> I2cInitRespone {
     // Since primary I2C failed, try to create hardware I2C on alt pins first
     let hw_config = I2cConfig::new()
         .baudrate(KiloHertz::from(100).into())
@@ -835,21 +901,22 @@ fn init_alt_i2c_both(
                     // Try to read device ID to verify communication
                     match veml_rgb_temp.read_device_id() {
                         Ok(id) => {
-                            log::info!("VEML3328 device ID: 0x{:04X}", id);
+                            log::info!("VEML3328 device ID: 0x{id:04X}");
                             if id != 0x28 {
-                                log::warn!("Unexpected device ID! Expected 0x28, got 0x{:04X}", id);
+                                log::warn!("Unexpected device ID! Expected 0x28, got 0x{id:04X}");
                             }
-                        },
-                        Err(e) => log::warn!("Could not read VEML3328 device ID: {:?}", e),
+                        }
+                        Err(e) => log::warn!("Could not read VEML3328 device ID: {e:?}"),
                     }
-                },
+                }
                 Err(e) => {
-                    log::error!("Could not enable VEML3328 RGB sensor: {:?}", e);
+                    log::error!("Could not enable VEML3328 RGB sensor: {e:?}");
                 }
             }
 
             let veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>> = Arc::new(Mutex::new(veml_temp));
-            let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> = Arc::new(Mutex::new(veml_rgb_temp));
+            let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> =
+                Arc::new(Mutex::new(veml_rgb_temp));
 
             return (veml, veml_rgb, true);
         }
@@ -872,7 +939,10 @@ fn init_alt_i2c_both(
 
     let veml_enable_res = veml_temp.enable();
     if veml_enable_res.is_err() {
-        log::error!("VEML7700 enable failed on alt pins with bit-bang: {:?}", veml_enable_res.err());
+        log::error!(
+            "VEML7700 enable failed on alt pins with bit-bang: {:?}",
+            veml_enable_res.err()
+        );
         led::show_veml_not_found_error(ws2812_old, ws2812_new);
         unreachable!();
     }
@@ -884,16 +954,16 @@ fn init_alt_i2c_both(
             // Try to read device ID to verify communication
             match veml_rgb_temp.read_device_id() {
                 Ok(id) => {
-                    log::info!("VEML3328 device ID: 0x{:04X}", id);
+                    log::info!("VEML3328 device ID: 0x{id:04X}");
                     if id != 0x28 {
-                        log::warn!("Unexpected device ID! Expected 0x28, got 0x{:04X}", id);
+                        log::warn!("Unexpected device ID! Expected 0x28, got 0x{id:04X}");
                     }
-                },
-                Err(e) => log::warn!("Could not read VEML3328 device ID: {:?}", e),
+                }
+                Err(e) => log::warn!("Could not read VEML3328 device ID: {e:?}"),
             }
-        },
+        }
         Err(e) => {
-            log::error!("Could not enable VEML3328 RGB sensor: {:?}", e);
+            log::error!("Could not enable VEML3328 RGB sensor: {e:?}");
         }
     }
 
@@ -916,7 +986,8 @@ fn init_alt_i2c_both(
 
         // We'll return the dummy hardware VEML but it won't be used since the bit-banged one works
         let veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>> = Arc::new(Mutex::new(dummy_veml));
-        let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> = Arc::new(Mutex::new(veml_rgb_temp));
+        let veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>> =
+            Arc::new(Mutex::new(veml_rgb_temp));
 
         // Log warning that we're using a workaround
         log::warn!("Using workaround: bit-banged VEML7700 wrapped in hardware I2C type");

@@ -30,7 +30,7 @@ impl RunningMedianBuffer {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         let len = sorted.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             Some((sorted[len / 2 - 1] + sorted[len / 2]) / 2.0)
         } else {
             Some(sorted[len / 2])
@@ -80,7 +80,7 @@ impl RunningMedianBufferU16 {
         sorted.sort();
 
         let len = sorted.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             Some((sorted[len / 2 - 1] + sorted[len / 2]) / 2)
         } else {
             Some(sorted[len / 2])
@@ -94,10 +94,9 @@ impl RunningMedianBufferU16 {
     pub fn len(&self) -> usize {
         self.buffer.len()
     }
-    
+
     #[allow(dead_code)]
     pub fn is_full(&self) -> bool {
         self.buffer.len() >= self.capacity
     }
 }
-

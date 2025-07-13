@@ -62,16 +62,16 @@ where
         // First, try a simple register read to test communication
         match self.read_register(Register::ID_DATA) {
             Ok(id) => {
-                log::info!("VEML3328 Device ID before enable: 0x{:04X}", id);
+                log::info!("VEML3328 Device ID before enable: 0x{id:04X}");
                 if id == 0x0000 {
                     log::error!("Device ID is 0x0000 - I2C communication failed!");
                     // Return a generic I2C error - we can't create the specific error type
                     // without knowing the concrete I2C implementation
                     return Err(Error::I2C(self.i2c.write(0xFF, &[]).unwrap_err()));
                 }
-            },
+            }
             Err(e) => {
-                log::error!("Failed to read device ID during enable: {:?}", e);
+                log::error!("Failed to read device ID during enable: {e:?}");
                 return Err(e);
             }
         }
@@ -79,11 +79,11 @@ where
         // Try to read current config
         let current_config = match self.read_register(Register::CONFIG) {
             Ok(cfg) => {
-                log::info!("Current config register: 0x{:04X}", cfg);
+                log::info!("Current config register: 0x{cfg:04X}");
                 cfg
-            },
+            }
             Err(e) => {
-                log::warn!("Could not read current config: {:?}", e);
+                log::warn!("Could not read current config: {e:?}");
                 0x8001 // Default to shutdown state (both SD0 and SD1 set)
             }
         };
@@ -93,9 +93,14 @@ where
         // Keep gain at 1x (bits 12-11 = 00) for normal sensitivity
         // Clear shutdown bits (bits 15 and 0)
         let new_config_bits = (current_config & !0x8071) | 0x0020; // Clear shutdown and set 100ms integration time
-        let config = Config { bits: new_config_bits };
+        let config = Config {
+            bits: new_config_bits,
+        };
 
-        log::info!("Writing optimized config for color measurement: 0x{:04X}", config.bits);
+        log::info!(
+            "Writing optimized config for color measurement: 0x{:04X}",
+            config.bits
+        );
         self.set_config(config)?;
 
         // Add longer delay for sensor to stabilize with new settings
@@ -103,21 +108,27 @@ where
 
         // Verify configuration was written
         let read_config = self.read_register(Register::CONFIG)?;
-        log::info!("VEML3328 Config after enable: 0x{:04X}", read_config);
+        log::info!("VEML3328 Config after enable: 0x{read_config:04X}");
 
         // Verify device ID again after configuration
         let final_id = self.read_register(Register::ID_DATA)?;
-        log::info!("VEML3328 Device ID after enable: 0x{:04X}", final_id);
+        log::info!("VEML3328 Device ID after enable: 0x{final_id:04X}");
 
         // Take a few test readings to verify sensor is working
         std::thread::sleep(std::time::Duration::from_millis(110)); // Wait for integration time
-        match (self.read_register(Register::R_DATA), self.read_register(Register::G_DATA), self.read_register(Register::B_DATA)) {
+        match (
+            self.read_register(Register::R_DATA),
+            self.read_register(Register::G_DATA),
+            self.read_register(Register::B_DATA),
+        ) {
             (Ok(r), Ok(g), Ok(b)) => {
-                log::info!("Initial color readings after enable: R={}, G={}, B={}", r, g, b);
+                log::info!("Initial color readings after enable: R={r}, G={g}, B={b}",);
                 if r == 0 && g == 0 && b == 0 {
-                    log::warn!("All color readings are zero - sensor might not be working properly");
+                    log::warn!(
+                        "All color readings are zero - sensor might not be working properly"
+                    );
                 }
-            },
+            }
             _ => log::warn!("Could not read initial color values after enable"),
         }
 
@@ -160,18 +171,18 @@ where
         Ok(())
     }
 
-    fn write_register(
-        &mut self,
-        register: u8,
-        value: u16,
-    ) -> Result<(), Error<I2C::Error>> {
+    fn write_register(&mut self, register: u8, value: u16) -> Result<(), Error<I2C::Error>> {
         let data = [register, value as u8, (value >> 8) as u8];
-        log::debug!("Writing to VEML3328 register 0x{:02X}: 0x{:04X} (bytes: [{}, {}, {}])",
-                   register, value, data[0], data[1], data[2]);
+        log::debug!(
+            "Writing to VEML3328 register 0x{:02X}: 0x{:04X} (bytes: [{}, {}, {}])",
+            register,
+            value,
+            data[0],
+            data[1],
+            data[2]
+        );
 
-        self.i2c
-            .write(DEVICE_ADDRESS, &data)
-            .map_err(Error::I2C)?;
+        self.i2c.write(DEVICE_ADDRESS, &data).map_err(Error::I2C)?;
 
         // Add longer delay after write operation for bit-banged I2C
         std::thread::sleep(std::time::Duration::from_millis(10));
@@ -186,8 +197,8 @@ where
 
         // First verify device communication by reading ID
         match self.read_register(Register::ID_DATA) {
-            Ok(id) => log::info!("Device ID verification: 0x{:04X}", id),
-            Err(e) => log::warn!("Failed to read device ID: {:?}", e),
+            Ok(id) => log::info!("Device ID verification: 0x{id:04X}"),
+            Err(e) => log::warn!("Failed to read device ID: {e:?}"),
         }
 
         // Read registers 0x00 to 0x0F (0-15)
@@ -208,10 +219,10 @@ where
                         0x0C => "ID_DATA (Device ID)",
                         _ => "RESERVED/UNKNOWN",
                     };
-                    log::info!("Register 0x{:02X} ({}): 0x{:04X} ({})", i, register_name, value, value);
+                    log::info!("Register 0x{i:02X} ({register_name}): 0x{value:04X} ({value})");
                 }
                 Err(e) => {
-                    log::warn!("Failed to read register 0x{:02X}: {:?}", i, e);
+                    log::warn!("Failed to read register 0x{i:02X}: {e:?}");
                     registers[i as usize] = 0; // Set to 0 on error
                 }
             }
@@ -227,7 +238,7 @@ where
         // Add small delay before read for bit-banged I2C stability
         std::thread::sleep(std::time::Duration::from_millis(5));
 
-        log::debug!("Reading VEML3328 register 0x{:02X}", register);
+        log::debug!("Reading VEML3328 register 0x{register:02X}");
 
         self.i2c
             .write_read(DEVICE_ADDRESS, &[register], &mut data)
@@ -236,8 +247,14 @@ where
         // According to datasheet: data[0] = LSB (bits 7-0), data[1] = MSB (bits 15-8)
         let result = u16::from(data[0]) | (u16::from(data[1]) << 8);
 
-        log::debug!("VEML3328 register 0x{:02X}: raw=[{}, {}], result=0x{:04X} ({})",
-                   register, data[0], data[1], result, result);
+        log::debug!(
+            "VEML3328 register 0x{:02X}: raw=[{}, {}], result=0x{:04X} ({})",
+            register,
+            data[0],
+            data[1],
+            result,
+            result
+        );
 
         Ok(result)
     }
