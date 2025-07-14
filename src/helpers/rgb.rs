@@ -1,4 +1,4 @@
-use crate::helpers::RGBMultipliers;
+use super::nvs::RGBMultipliers;
 
 pub fn optimize_rgb_channels(
     raw_color: (u16, u16, u16),

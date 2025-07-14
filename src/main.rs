@@ -1,11 +1,16 @@
 #![feature(iter_intersperse)]
 #![allow(clippy::await_holding_lock)]
 
-use crate::helpers::NvsData;
-use crate::helpers::RGBMultipliers;
 use crate::helpers::baseline_readings::take_baseline_reading;
 use crate::helpers::baseline_readings::take_rgb_white_balance_calibration;
+use crate::helpers::i2c_init::Pins;
+use crate::helpers::i2c_init::initialize_veml;
 use crate::helpers::median_buffer;
+use crate::helpers::nvs::NvsData;
+use crate::helpers::nvs::RGBMultipliers;
+use crate::helpers::nvs::clear_rgb_multipliers_nvs;
+use crate::helpers::nvs::get_saved_algorithm_variables;
+use crate::helpers::nvs::get_saved_rgb_multipliers;
 use crate::helpers::serial::serial_connection;
 use core::fmt::Debug;
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -36,7 +41,8 @@ use esp_idf_svc::{
     hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::{HardwareI2cInstance, Pins, SimpleBitBangI2cInstance, initialize_veml};
+use helpers::bitbang_i2c::HardwareI2cInstance;
+use helpers::bitbang_i2c::SimpleBitBangI2cInstance;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
@@ -122,7 +128,7 @@ fn main() -> Result<(), ()> {
         .unwrap()
         .write_nocopy(std::iter::repeat_n(RGB8::new(255, 255, 0), 1))
         .unwrap();
-    let (veml, veml_rgb, is_old_pcb) = initialize_veml(
+    let veml_res = initialize_veml(
         Pins {
             i2c: peripherals.i2c0,
             sda1: peripherals.pins.gpio6,
@@ -133,7 +139,7 @@ fn main() -> Result<(), ()> {
         ws2812_old.clone(),
         ws2812_new.clone(),
     );
-    let ws2812 = match is_old_pcb {
+    let ws2812 = match veml_res.is_old_pcb {
         true => ws2812_old,
         false => ws2812_new,
     };
@@ -196,18 +202,23 @@ fn main() -> Result<(), ()> {
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
     FreeRtos.delay_ms(500);
-    let baseline_reading: f32 = take_baseline_reading(veml.clone());
+    let baseline_reading: f32 = take_baseline_reading(veml_res.veml7700.clone());
 
     // White balance calibration at 50% LED brightness
-    let rgb_white_balance: (u16, u16, u16) =
-        take_rgb_white_balance_calibration(veml_rgb.clone(), led_light.clone());
+    let rgb_white_balance: Option<(u16, u16, u16)> = match veml_res.veml3328.clone() {
+        Some(d) => Some(take_rgb_white_balance_calibration(
+            d.clone(),
+            led_light.clone(),
+        )),
+        None => None,
+    };
 
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(500);
-    let dark_baseline_reading: f32 = take_baseline_reading(veml.clone());
+    let dark_baseline_reading: f32 = take_baseline_reading(veml_res.veml7700.clone());
 
     // For compatibility, we'll use the white balance as both baseline values
-    let dark_rgb_baseline: (u16, u16, u16) = rgb_white_balance;
+    let dark_rgb_baseline = rgb_white_balance;
 
     log::info!("Baseline readings completed with white balance calibration");
 
@@ -219,12 +230,12 @@ fn main() -> Result<(), ()> {
 
     // Try to load algorithm variables with error recovery
     let saved_algorithm = match std::panic::catch_unwind(|| {
-        helpers::get_saved_algorithm_variables(arced_nvs.as_ref().clone())
+        get_saved_algorithm_variables(arced_nvs.as_ref().clone())
     }) {
         Ok(algorithm) => algorithm,
         Err(_) => {
             log::error!("Algorithm loading caused panic - using defaults");
-            helpers::NvsData {
+            NvsData {
                 b: 0.0,
                 m: 1.0,
                 threshold: 0.5,
@@ -234,19 +245,17 @@ fn main() -> Result<(), ()> {
 
     // Try to load RGB multipliers with error recovery and wrap in Arc<Mutex<>>
     let saved_rgb_multipliers = Arc::new(Mutex::new(
-        match std::panic::catch_unwind(|| {
-            helpers::get_saved_rgb_multipliers(arced_nvs.as_ref().clone())
-        }) {
+        match std::panic::catch_unwind(|| get_saved_rgb_multipliers(arced_nvs.as_ref().clone())) {
             Ok(multipliers) => multipliers,
             Err(_) => {
                 log::error!(
                     "RGB multipliers loading caused panic - clearing NVS and using defaults"
                 );
                 // Clear the corrupted data
-                if let Err(e) = helpers::clear_rgb_multipliers_nvs(arced_nvs.as_ref().clone()) {
+                if let Err(e) = clear_rgb_multipliers_nvs(arced_nvs.as_ref().clone()) {
                     log::error!("Failed to clear RGB multipliers NVS: {e:?}");
                 }
-                helpers::RGBMultipliers::default()
+                RGBMultipliers::default()
             }
         },
     ));
@@ -254,12 +263,12 @@ fn main() -> Result<(), ()> {
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
     let server_data = ServerRunData {
-        veml: veml.clone(),
-        veml_rgb: veml_rgb.clone(),
+        veml: veml_res.veml7700.clone(),
+        veml_rgb: veml_res.veml3328.clone().unwrap(), // TODO
         dark_baseline_reading,
         baseline_reading,
-        rgb_baseline: rgb_white_balance, // Use white balance instead of rgb_baseline
-        dark_rgb_baseline,
+        rgb_baseline: rgb_white_balance.unwrap(), // Use white balance instead of rgb_baseline TODO
+        dark_rgb_baseline: dark_rgb_baseline.unwrap(), // TODO
         wifi_status: wifi_status.clone(),
         led_light: led_light.clone(),
         nvs: arced_nvs.clone(),

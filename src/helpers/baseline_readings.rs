@@ -4,10 +4,9 @@ use embedded_hal::delay::DelayNs;
 use esp_idf_svc::hal::{delay::FreeRtos, ledc::LedcDriver};
 use veml7700::Veml7700;
 
-use crate::{
-    helpers::{HardwareI2cInstance, SimpleBitBangI2cInstance},
-    veml3328,
-};
+use crate::veml3328;
+
+use super::bitbang_i2c::{HardwareI2cInstance, SimpleBitBangI2cInstance};
 
 pub fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,

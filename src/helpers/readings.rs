@@ -8,13 +8,17 @@ use veml7700::Veml7700;
 use crate::{
     LedType,
     helpers::{
-        HardwareI2cInstance, NvsData, RGBMultipliers, SimpleBitBangI2cInstance,
         median_buffer::{RunningMedianBuffer, RunningMedianBufferU16},
         rgb::{apply_rgb_multipliers, apply_spectral_response_correction},
     },
     led::set_led,
     veml3328,
     wifi::WifiEnum,
+};
+
+use super::{
+    bitbang_i2c::{HardwareI2cInstance, SimpleBitBangI2cInstance},
+    nvs::{NvsData, RGBMultipliers},
 };
 
 // Static for concurrency control and caching last result

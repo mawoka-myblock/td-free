@@ -8,7 +8,11 @@ use log::error;
 use url::Url;
 
 use crate::{
-    WsHandler, WsHandlerError, helpers,
+    WsHandler, WsHandlerError,
+    helpers::nvs::{
+        get_saved_algorithm_variables, read_spoolman_data, save_algorithm_variables,
+        save_spoolman_data,
+    },
     routes::serve::{serve_algo_setup_page, serve_wifi_setup_page},
     wifi,
 };
@@ -106,8 +110,8 @@ impl WsHandler<'_> {
             && threshold_value.is_none()
             && spoolman_value.is_none()
         {
-            let saved_algorithm = helpers::get_saved_algorithm_variables(self.nvs.as_ref().clone());
-            let saved_spoolman = helpers::read_spoolman_data(self.nvs.as_ref().clone());
+            let saved_algorithm = get_saved_algorithm_variables(self.nvs.as_ref().clone());
+            let saved_spoolman = read_spoolman_data(self.nvs.as_ref().clone());
             let spoolman_url = match saved_spoolman.0 {
                 Some(d) => d,
                 None => "".to_string(),
@@ -146,7 +150,7 @@ impl WsHandler<'_> {
         let mod_spoolman_field_name = spoolman_field_name
             .map(Cow::Borrowed)
             .unwrap_or_else(|| Cow::Owned("".to_string()));
-        let save_spoolman_res = helpers::save_spoolman_data(
+        let save_spoolman_res = save_spoolman_data(
             &mod_spoolman_value,
             &mod_spoolman_field_name,
             self.nvs.as_ref().clone(),
@@ -156,7 +160,7 @@ impl WsHandler<'_> {
             embassy_time::Timer::after_millis(50).await;
             reset::restart();
         }
-        match helpers::save_algorithm_variables(
+        match save_algorithm_variables(
             &mod_b_value,
             &mod_m_value,
             &mod_threshold_value,

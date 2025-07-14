@@ -4,7 +4,7 @@ use embedded_io_async::{Read, Write};
 use crate::{
     WsHandler, WsHandlerError,
     helpers::{
-        self, RGBMultipliers,
+        nvs::{RGBMultipliers, save_rgb_multipliers},
         rgb::{apply_complete_color_correction, optimize_brightness, optimize_rgb_channels},
     },
 };
@@ -138,7 +138,7 @@ impl WsHandler<'_> {
         }
 
         // Save to NVS
-        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+        match save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
             Ok(_) => {
                 conn.initiate_response(200, None, &[("Content-Type", "application/json")])
                     .await?;
@@ -351,7 +351,7 @@ impl WsHandler<'_> {
         }
 
         // Save to NVS
-        match helpers::save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
+        match save_rgb_multipliers(new_multipliers, self.nvs.as_ref().clone()) {
             Ok(_) => {
                 let response = format!(
                     r#"{{"status": "success", "red": {optimized_red:.2}, "green": {optimized_green:.2}, "blue": {optimized_blue:.2}, "brightness": {optimized_brightness:.2}, "td_reference": {current_lux:.2}}}"#,

@@ -21,7 +21,7 @@ use url::Url;
 use crate::{
     EdgeError, WsHandler, WsHandlerError,
     helpers::{
-        self, read_spoolman_data,
+        nvs::read_spoolman_data,
         readings::{BUSY, LAST_DATA, read_data_with_buffer},
     },
     wifi::WifiEnum,
@@ -39,7 +39,7 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let spoolman_data = helpers::read_spoolman_data(self.nvs.as_ref().clone());
+        let spoolman_data = read_spoolman_data(self.nvs.as_ref().clone());
         let spoolman_available =
             match spoolman_data.0.is_some() && !spoolman_data.0.unwrap().is_empty() {
                 true => "true",
