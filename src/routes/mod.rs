@@ -30,6 +30,8 @@ use crate::{
 static INDEX_HTML: &str = include_str!("static/index.html");
 static STYLE_CSS: &str = include_str!("static/style.css");
 static SCRIPT_JS: &str = include_str!("static/script.js");
+static SCRIPT_CALIBRATE_JS: &str = include_str!("static/calibrate/script.js");
+static CALIBRATE_HTML: &str = include_str!("static/calibrate/index.html");
 
 impl WsHandler<'_> {
     pub async fn server_index_page<T, const N: usize>(
@@ -39,24 +41,9 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
-        let spoolman_data = read_spoolman_data(self.nvs.as_ref().clone());
-        let spoolman_available =
-            match spoolman_data.0.is_some() && !spoolman_data.0.unwrap().is_empty() {
-                true => "true",
-                false => "false",
-            };
         conn.initiate_response(200, None, &[("Content-Type", "text/html")])
             .await?;
-        conn.write_all(
-            INDEX_HTML
-                .replace(
-                    "{{VERSION}}",
-                    option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN"),
-                )
-                .replace("{{ SPOOLMAN_AVAILABLE }}", spoolman_available)
-                .as_bytes(),
-        )
-        .await?;
+        conn.write_all(INDEX_HTML.as_bytes()).await?;
         Ok(())
     }
 }
@@ -228,17 +215,14 @@ impl WsHandler<'_> {
             // We got the lock, run the function and update LAST_DATA
             let result = read_data_with_buffer(
                 self.veml.clone(),
-                self.veml_rgb.clone(),
                 self.dark_baseline_reading,
                 self.baseline_reading,
-                self.rgb_baseline,
-                self.dark_rgb_baseline,
                 self.wifi_status.clone(),
                 self.led_light.clone(),
                 self.ws2812b.clone(),
                 self.saved_algorithm,
                 self.lux_buffer.clone(),
-                self.rgb_buffers.clone(),
+                self.rgb.clone(),
                 self.saved_rgb_multipliers.clone(),
             )
             .await
@@ -281,6 +265,9 @@ impl Handler for WsHandler<'_> {
             conn.initiate_response(405, Some("Method Not Allowed"), &[])
                 .await?;
         } else if headers.path == "/" || headers.path.is_empty() {
+            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
+                .await?;
+            conn.write_all(INDEX_HTML.as_bytes()).await?;
             WsHandler::server_index_page(self, conn).await?;
         } else if headers.path == "/style.css" {
             conn.initiate_response(200, None, &[("Content-Type", "text/css")])
@@ -290,6 +277,14 @@ impl Handler for WsHandler<'_> {
             conn.initiate_response(200, None, &[("Content-Type", "application/javascript")])
                 .await?;
             conn.write_all(SCRIPT_JS.as_bytes()).await?;
+        } else if headers.path == "/calibrate/script.js" {
+            conn.initiate_response(200, None, &[("Content-Type", "application/javascript")])
+                .await?;
+            conn.write_all(SCRIPT_CALIBRATE_JS.as_bytes()).await?;
+        } else if headers.path == "/calibrate" {
+            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
+                .await?;
+            conn.write_all(CALIBRATE_HTML.as_bytes()).await?;
         } else if headers.path.starts_with("/settings") {
             WsHandler::algorithm_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/wifi") {
@@ -306,6 +301,8 @@ impl Handler for WsHandler<'_> {
             }
         } else if headers.path == "/auto_calibrate" && headers.method == EdgeMethod::Post {
             WsHandler::auto_calibrate_gray_reference(self, conn).await?;
+        } else if headers.path == "/config" && headers.method == EdgeMethod::Get {
+            WsHandler::read_config_route(self, conn).await?;
         }
         /*else if headers.path.starts_with("/spoolman/filaments") {
             WsHandler::spoolman_get_filaments(self, conn).await?;

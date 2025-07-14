@@ -14,10 +14,12 @@ body {
     background-color: #fff;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
     border-radius: 10px;
-    padding: 20px;
+    padding: 0.5rem;
     width: 90%;
     max-width: 700px;
     min-height: 300px;
+    display: flex;
+    flex-direction: column;
 }
 
 h1 {
@@ -48,7 +50,7 @@ h1 {
 }
 
 .hidden {
-    display: none;
+    display: none !important;
 }
 
 .color-display {
@@ -193,7 +195,7 @@ h1 {
 }
 
 .collapsible-header::after {
-    content: '+';
+    content: "+";
     position: absolute;
     right: 5px;
     top: 50%;
@@ -203,5 +205,7 @@ h1 {
 }
 
 .collapsible-header.open::after {
-    content: '−';
+    content: "−";
+}
+.rgb-els {
 }

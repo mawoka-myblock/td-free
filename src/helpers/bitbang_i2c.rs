@@ -60,7 +60,7 @@ impl embedded_hal::i2c::ErrorType for SimpleBitBangI2cInstance {
 }
 
 impl SimpleBitBangI2cInstance {
-    // Use timing based on VEML3328 datasheet - Standard Mode requirements
+    // Use timing based on VEML3328 datasheet - Standard Mode req^uirements
     const DELAY_LOW_US: u32 = 5; // t(LOW) >= 4.7μs
     const DELAY_HIGH_US: u32 = 5; // t(HIGH) >= 4.0μs
     const DELAY_SETUP_US: u32 = 1; // t(SUDAT) >= 250ns

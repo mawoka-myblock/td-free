@@ -6,18 +6,17 @@ use once_cell::sync::Lazy;
 use veml7700::Veml7700;
 
 use crate::{
-    LedType,
+    LedType, RgbWsHandler,
     helpers::{
-        median_buffer::{RunningMedianBuffer, RunningMedianBufferU16},
+        median_buffer::RunningMedianBuffer,
         rgb::{apply_rgb_multipliers, apply_spectral_response_correction},
     },
     led::set_led,
-    veml3328,
     wifi::WifiEnum,
 };
 
 use super::{
-    bitbang_i2c::{HardwareI2cInstance, SimpleBitBangI2cInstance},
+    bitbang_i2c::HardwareI2cInstance,
     nvs::{NvsData, RGBMultipliers},
 };
 
@@ -39,24 +38,15 @@ pub static LAST_MEASUREMENT: Lazy<Mutex<Option<LastMeasurement>>> = Lazy::new(||
 #[allow(clippy::too_many_arguments)]
 pub async fn read_data_with_buffer(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_white_balance: (u16, u16, u16),
-    _dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
     lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
-    rgb_buffers: Arc<
-        Mutex<(
-            RunningMedianBufferU16,
-            RunningMedianBufferU16,
-            RunningMedianBufferU16,
-        )>,
-    >,
-    rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
+    rgb_data: Option<RgbWsHandler>,
+    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
 ) -> Option<String> {
     // We need to be under 1 seconds for this function.
 
@@ -149,11 +139,14 @@ pub async fn read_data_with_buffer(
             let mut buffer = lux_buffer.lock().unwrap();
             buffer.clear();
         }
-        {
-            let mut buffers = rgb_buffers.lock().unwrap();
-            buffers.0.clear();
-            buffers.1.clear();
-            buffers.2.clear();
+        match rgb_data {
+            Some(d) => {
+                let mut buffers = d.rgb_buffers.lock().unwrap();
+                buffers.0.clear();
+                buffers.1.clear();
+                buffers.2.clear();
+            }
+            None => (),
         }
 
         // Update last measurement cache
@@ -212,21 +205,22 @@ pub async fn read_data_with_buffer(
             let lux_reading = locked_veml.read_lux().unwrap_or(0.0);
             buffer.push(lux_reading);
         }
+        if let Some(d) = rgb_data.clone() {
+            let mut locked_rgb = d.veml_rgb.lock().unwrap();
+            if let (Ok(r), Ok(g), Ok(b)) = (
+                locked_rgb.read_red(),
+                locked_rgb.read_green(),
+                locked_rgb.read_blue(),
+            ) {
+                log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
 
-        let mut locked_rgb = veml_rgb.lock().unwrap();
-        if let (Ok(r), Ok(g), Ok(b)) = (
-            locked_rgb.read_red(),
-            locked_rgb.read_green(),
-            locked_rgb.read_blue(),
-        ) {
-            log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
-
-            let mut buffers = rgb_buffers.lock().unwrap();
-            buffers.0.push(r);
-            buffers.1.push(g);
-            buffers.2.push(b);
+                let mut buffers = d.rgb_buffers.lock().unwrap();
+                buffers.0.push(r);
+                buffers.1.push(g);
+                buffers.2.push(b);
+            }
+            drop(locked_rgb); // Release lock
         }
-        drop(locked_rgb); // Release lock
     }
 
     // worst case time = 800 + 2 * 100 = 1000ms
@@ -243,18 +237,22 @@ pub async fn read_data_with_buffer(
         buffer.median().unwrap_or(median_reading) // Fallback to detection median if buffer is empty
     };
 
+    let td_value = (final_median_lux / baseline_reading) * 10.0;
+    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
+    if rgb_data.is_none() {
+        return Some(format!("{adjusted_td_value:.2},,"));
+    }
+    let rgb_d = rgb_data.unwrap();
     let (r_median_raw, g_median_raw, b_median_raw) = {
-        let buffers = rgb_buffers.lock().unwrap();
+        let buffers = rgb_d.rgb_buffers.lock().unwrap();
         (
-            buffers.0.median().unwrap_or(rgb_white_balance.0),
-            buffers.1.median().unwrap_or(rgb_white_balance.1),
-            buffers.2.median().unwrap_or(rgb_white_balance.2),
+            buffers.0.median().unwrap_or(rgb_d.rgb_baseline.0),
+            buffers.1.median().unwrap_or(rgb_d.rgb_baseline.1),
+            buffers.2.median().unwrap_or(rgb_d.rgb_baseline.2),
         )
     };
 
     // Calculate TD from RAW lux reading
-    let td_value = (final_median_lux / baseline_reading) * 10.0;
-    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
     log::info!(
         "Final TD value: {:.2} (raw lux: {:.2}, baseline: {:.2}, m: {:.3}, b: {:.3})",
@@ -267,8 +265,8 @@ pub async fn read_data_with_buffer(
 
     // Read clear channel for brightness correction (RAW)
     let clear_median_raw = {
-        let mut locked_rgb = veml_rgb.lock().unwrap();
-        locked_rgb.read_clear().unwrap_or(rgb_white_balance.0)
+        let mut locked_rgb = rgb_d.veml_rgb.lock().unwrap();
+        locked_rgb.read_clear().unwrap_or(rgb_d.rgb_baseline.0)
     };
 
     log::debug!(
@@ -281,16 +279,16 @@ pub async fn read_data_with_buffer(
         r_median_raw,
         g_median_raw,
         b_median_raw,
-        rgb_white_balance.0,
-        rgb_white_balance.1,
-        rgb_white_balance.2,
+        rgb_d.rgb_baseline.0,
+        rgb_d.rgb_baseline.1,
+        rgb_d.rgb_baseline.2,
     );
 
     log::info!("Spectral corrected RGB: ({r_corrected},{g_corrected},{b_corrected})");
 
     // Step 2: Apply user RGB multipliers with lux-based brightness adjustment to corrected values
     let (r_final, g_final, b_final) = {
-        let multipliers = rgb_multipliers.lock().unwrap();
+        let multipliers = saved_rgb_multipliers.lock().unwrap();
         apply_rgb_multipliers(
             r_corrected,
             g_corrected,
@@ -320,7 +318,7 @@ pub async fn read_data_with_buffer(
     // Log buffer status and detailed color information
     let (lux_len, rgb_len) = {
         let lux_buf = lux_buffer.lock().unwrap();
-        let rgb_buf = rgb_buffers.lock().unwrap();
+        let rgb_buf = rgb_d.rgb_buffers.lock().unwrap();
         (lux_buf.len(), rgb_buf.0.len())
     };
 

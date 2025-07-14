@@ -20,7 +20,7 @@ impl WsHandler<'_> {
     {
         let multipliers = self.saved_rgb_multipliers.lock().unwrap();
         let json_response = format!(
-            r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}, "reference_r": {}, "reference_g": {}, "reference_b": {}}}"#,
+            r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}, "reference_r": {}, "reference_g": {}, "reference_b": {}, "rgb_disabled": true}}"#,
             multipliers.red,
             multipliers.green,
             multipliers.blue,
@@ -162,6 +162,14 @@ impl WsHandler<'_> {
     where
         T: Read + Write,
     {
+        if self.rgb.is_none() {
+            conn.initiate_response(404, None, &[("Content-Type", "application/json")])
+                .await?;
+            conn.write_all(br#"{"status": "disabled", "message": "RGB Disabled"}"#)
+                .await?;
+            return Ok(());
+        }
+        let rgb_d = self.rgb.clone().unwrap();
         log::info!("Starting optimization-based color calibration...");
 
         // Read the request body to get reference color
@@ -239,7 +247,7 @@ impl WsHandler<'_> {
 
         // Take current RAW median reading from the buffers
         let (current_r, current_g, current_b) = {
-            let buffers = self.rgb_buffers.lock().unwrap();
+            let buffers = rgb_d.rgb_buffers.lock().unwrap();
             (
                 buffers.0.median().unwrap_or(0),
                 buffers.1.median().unwrap_or(0),
@@ -280,7 +288,7 @@ impl WsHandler<'_> {
         let optimized_brightness = optimize_brightness(
             (current_r, current_g, current_b),
             (target_r, target_g, target_b),
-            self.rgb_baseline,
+            rgb_d.rgb_baseline,
             current_lux,
             current_multipliers,
             100,
@@ -292,7 +300,7 @@ impl WsHandler<'_> {
         let (optimized_red, optimized_green, optimized_blue) = optimize_rgb_channels(
             (current_r, current_g, current_b),
             (target_r, target_g, target_b),
-            self.rgb_baseline,
+            rgb_d.rgb_baseline,
             current_lux,
             current_multipliers,
             100,
@@ -311,7 +319,7 @@ impl WsHandler<'_> {
             (current_r, current_g, current_b).0,
             (current_r, current_g, current_b).1,
             (current_r, current_g, current_b).2,
-            self.rgb_baseline,
+            rgb_d.rgb_baseline,
             current_lux,
             &current_multipliers,
         );

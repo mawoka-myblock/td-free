@@ -43,6 +43,7 @@ use esp_idf_svc::{
 
 use helpers::bitbang_i2c::HardwareI2cInstance;
 use helpers::bitbang_i2c::SimpleBitBangI2cInstance;
+use log::info;
 use smart_leds::RGB8;
 use veml7700::Veml7700;
 use wifi::WifiEnum;
@@ -138,6 +139,11 @@ fn main() -> Result<(), ()> {
         },
         ws2812_old.clone(),
         ws2812_new.clone(),
+    );
+    info!(
+        "Old PCB? {}, Color? {}",
+        veml_res.is_old_pcb,
+        veml_res.veml3328.is_some()
     );
     let ws2812 = match veml_res.is_old_pcb {
         true => ws2812_old,
@@ -264,11 +270,11 @@ fn main() -> Result<(), ()> {
     let stack = edge_nal_std::Stack::new();
     let server_data = ServerRunData {
         veml: veml_res.veml7700.clone(),
-        veml_rgb: veml_res.veml3328.clone().unwrap(), // TODO
+        veml_rgb: veml_res.veml3328.clone(), // TODO
         dark_baseline_reading,
         baseline_reading,
-        rgb_baseline: rgb_white_balance.unwrap(), // Use white balance instead of rgb_baseline TODO
-        dark_rgb_baseline: dark_rgb_baseline.unwrap(), // TODO
+        rgb_baseline: rgb_white_balance, // Use white balance instead of rgb_baseline TODO
+        dark_rgb_baseline,               // TODO
         wifi_status: wifi_status.clone(),
         led_light: led_light.clone(),
         nvs: arced_nvs.clone(),
@@ -312,11 +318,11 @@ fn main() -> Result<(), ()> {
 
 pub struct ServerRunData<'a> {
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    veml_rgb: Option<Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_baseline: (u16, u16, u16),
-    dark_rgb_baseline: (u16, u16, u16),
+    rgb_baseline: Option<(u16, u16, u16)>,
+    dark_rgb_baseline: Option<(u16, u16, u16)>,
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
@@ -344,27 +350,33 @@ pub async fn run<'a>(
     );
 
     let acceptor = stack.bind(addr).await?;
+    let ws_rgb_data = match data.veml_rgb {
+        Some(some_veml_rgb) => Some(RgbWsHandler {
+            dark_rgb_baseline: data.dark_rgb_baseline.unwrap(),
+            rgb_baseline: data.rgb_baseline.unwrap(),
+            rgb_buffers: Arc::new(Mutex::new((
+                median_buffer::RunningMedianBufferU16::new(100),
+                median_buffer::RunningMedianBufferU16::new(100),
+                median_buffer::RunningMedianBufferU16::new(100),
+            ))),
+            veml_rgb: some_veml_rgb,
+        }),
+        None => None,
+    };
 
     let handler = WsHandler {
         veml: data.veml,
-        veml_rgb: data.veml_rgb,
         dark_baseline_reading: data.dark_baseline_reading,
         baseline_reading: data.baseline_reading,
-        rgb_baseline: data.rgb_baseline,
-        dark_rgb_baseline: data.dark_rgb_baseline,
         wifi_status: data.wifi_status,
         led_light: data.led_light,
         nvs: data.nvs,
         ws2812b: data.ws2812b,
         saved_algorithm: data.saved_algorithm,
-        saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
         // Use smaller buffers to reduce memory usage
         lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
-        rgb_buffers: Arc::new(Mutex::new((
-            median_buffer::RunningMedianBufferU16::new(100),
-            median_buffer::RunningMedianBufferU16::new(100),
-            median_buffer::RunningMedianBufferU16::new(100),
-        ))),
+        rgb: ws_rgb_data,
+        saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
     };
 
     match server.run(None, acceptor, handler).await {
@@ -392,20 +404,24 @@ type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 hea
 
 struct WsHandler<'a> {
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    rgb_baseline: (u16, u16, u16),
-    dark_rgb_baseline: (u16, u16, u16),
     wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     ws2812b: Arc<Mutex<LedType<'a>>>,
     saved_algorithm: NvsData,
-    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
     // Add median buffers
     lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
-    rgb_buffers: Arc<
+    rgb: Option<RgbWsHandler>,
+    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
+}
+#[derive(Clone)]
+pub struct RgbWsHandler {
+    pub rgb_baseline: (u16, u16, u16),
+    pub dark_rgb_baseline: (u16, u16, u16),
+    pub veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
+    pub rgb_buffers: Arc<
         Mutex<(
             median_buffer::RunningMedianBufferU16,
             median_buffer::RunningMedianBufferU16,

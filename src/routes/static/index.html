@@ -1,111 +1,70 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Td-Free</title>
-    <link rel="stylesheet" href="./style.css">
-</head>
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Td-Free</title>
+        <link rel="stylesheet" href="./style.css" />
+    </head>
 
-<body>
-    <div class="container">
-        <h1>Td-Free</h1>
-        <p id="content"></p>
+    <body>
+        <div class="container">
+            <h1>Td-Free</h1>
+            <p id="content">Loading...</p>
 
-        <div id="color-display" class="color-display hidden">
-            <div id="color-square" class="color-square" onclick="copyHex()"></div>
-            <div id="color-hex" class="color-hex" onclick="copyHex()"></div>
-        </div>
-
-        <div id="confidence-indicator" class="confidence-indicator hidden">
-            <div>Confidence: <span id="confidence-text">0%</span></div>
-            <div class="confidence-bar">
-                <div id="confidence-fill" class="confidence-fill"></div>
+            <div id="color-display" class="color-display hidden">
+                <div
+                    id="color-square"
+                    class="color-square"
+                    onclick="copyHex()"
+                ></div>
+                <div id="color-hex" class="color-hex" onclick="copyHex()"></div>
             </div>
-        </div>
 
-        <div id="rgb-correction" class="rgb-correction">
-            <h3 class="collapsible-header" onclick="toggleCalibrationBlock()">Color Correction</h3>
-            <div id="calibration-content" class="hidden">
-                <div class="ref-color">
-                    <label>Target Color: </label>
-                    <div id="ref-color-square" class="color-square" style="display:inline-block;vertical-align:middle;width:30px;height:30px;" onclick="openColorPickerModal()"></div>
-                    <span id="ref-hex">#7F7F7F</span>
-                </div>
-
-                <div class="rgb-control">
-                    <label>R:</label>
-                    <input type="range" id="red-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                           oninput="updateSliderDisplay('red', this.value)"
-                           onchange="updateMultAndSave('red', this.value)">
-                    <div id="red-val" class="value-display">1.00</div>
-                </div>
-                <div class="rgb-control">
-                    <label>G:</label>
-                    <input type="range" id="green-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                           oninput="updateSliderDisplay('green', this.value)"
-                           onchange="updateMultAndSave('green', this.value)">
-                    <div id="green-val" class="value-display">1.00</div>
-                </div>
-                <div class="rgb-control">
-                    <label>B:</label>
-                    <input type="range" id="blue-mult" min="0.5" max="2.0" step="0.01" value="1.00"
-                           oninput="updateSliderDisplay('blue', this.value)"
-                           onchange="updateMultAndSave('blue', this.value)">
-                    <div id="blue-val" class="value-display">1.00</div>
-                </div>
-                <div class="rgb-control">
-                    <label>☀:</label>
-                    <input type="range" id="bright-mult" min="0.1" max="3.0" step="0.01" value="1.00"
-                           oninput="updateSliderDisplay('brightness', this.value)"
-                           onchange="updateMultAndSave('brightness', this.value)">
-                    <div id="bright-val" class="value-display">1.00</div>
-                </div>
-
-                <button class="calibrate-btn" id="cal-btn" onclick="autoCal()">Auto-Calibrate</button>
-                <button class="reset-btn" onclick="resetMult()">Reset</button>
-            </div>
-        </div>
-        <!-- Custom RGB Picker Modal -->
-        <div id="color-picker-modal" style="display:none;position:fixed;top:0;left:0;width:100vw;height:100vh;background:rgba(0,0,0,0.4);z-index:1000;justify-content:center;align-items:center;">
-            <div style="background:#fff;padding:20px;border-radius:10px;min-width:260px;box-shadow:0 2px 12px rgba(0,0,0,0.2);">
-                <h4 style="margin-top:0;">Pick Reference Color</h4>
-                <div style="display:flex;align-items:center;justify-content:center;margin-bottom:10px;">
-                    <div id="picker-preview" style="width:40px;height:40px;border-radius:8px;border:2px solid #ccc;margin-right:10px;cursor:pointer;" onclick="document.getElementById('native-color-picker').click()"></div>
-                    <input type="color" id="native-color-picker" oninput="updateFromNativePicker(this.value)" style="display:none;">
-                    <span id="picker-hex" style="font-family:monospace;font-size:16px;"></span>
-                </div>
-                <div class="rgb-control">
-                    <label>R:</label>
-                    <input type="range" id="picker-r" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
-                    <input type="number" id="picker-r-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'r')">
-                </div>
-                <div class="rgb-control">
-                    <label>G:</label>
-                    <input type="range" id="picker-g" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
-                    <input type="number" id="picker-g-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'g')">
-                </div>
-                <div class="rgb-control">
-                    <label>B:</label>
-                    <input type="range" id="picker-b" min="0" max="255" step="1" value="127" oninput="updatePickerPreview()">
-                    <input type="number" id="picker-b-val" class="value-display" min="0" max="255" value="127" oninput="updateSliderFromInput(this, 'b')">
-                </div>
-                <div style="display:flex;gap:10px;margin-top:15px;">
-                    <button onclick="applyPickerColor()" class="calibrate-btn" style="flex:1;">Apply</button>
-                    <button onclick="closeColorPickerModal()" class="reset-btn" style="flex:1;">Cancel</button>
+            <div id="confidence-indicator" class="confidence-indicator hidden">
+                <div>Confidence: <span id="confidence-text">0%</span></div>
+                <div class="confidence-bar">
+                    <div id="confidence-fill" class="confidence-fill"></div>
                 </div>
             </div>
+
+            <button
+                id="save-to-spoolman-btn"
+                class="action-btn save-to-spoolman hidden"
+                onclick="saveToSpoolman()"
+            >
+                Save to Spoolman
+            </button>
+
+            <div style="margin-top: auto; display: flex">
+                <a href="/wifi" style="margin-left: auto; margin-right: auto"
+                    >Wifi Config</a
+                ><br />
+                <a
+                    href="/calibrate"
+                    id="calibrate-link"
+                    class="hidden"
+                    style="margin-left: auto; margin-right: auto"
+                    >Calibrate</a
+                >
+                <a
+                    style="margin-left: auto; margin-right: auto"
+                    href="/settings"
+                    >Settings</a
+                ><br />
+            </div>
+            <p
+                style="
+                    color: gray;
+                    font-size: smaller;
+                    margin-left: auto;
+                    margin-right: auto;
+                "
+            >
+                Version <span id="version-span"></span>
+            </p>
         </div>
 
-        <button id="save-to-spoolman-btn" class="action-btn save-to-spoolman hidden" onclick="saveToSpoolman()">Save to Spoolman</button>
-
-        <div style="margin-top: auto;">
-            <a href="/wifi">Wifi Config</a><br>
-            <a href="/settings">Settings</a><br>
-            <p style="color: gray; font-size: smaller;">Version <span id="version-span"></span></p>
-        </div>
-    </div>
-
-    <script src="./script.js"></script>
-</body>
+        <script src="./script.js"></script>
+    </body>
 </html>

@@ -191,4 +191,23 @@ impl WsHandler<'_> {
         };
         // Ok(())
     }
+
+    pub async fn read_config_route<T, const N: usize>(
+        &self,
+        conn: &mut Connection<'_, T, N>,
+    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
+    where
+        T: Read + Write,
+    {
+        let spoolman_available = read_spoolman_data(self.nvs.as_ref().clone()).0.is_some();
+        let color_available = self.rgb.is_some();
+        let version = option_env!("TD_FREE_VERSION").unwrap_or("UNKNOWN");
+        let data = format!(
+            r#"{{"spoolman_available": {spoolman_available}, "color_available": {color_available},"version": "{version}"}}"#,
+        );
+        conn.initiate_response(200, None, &[("Content-Type", "application/json")])
+            .await?;
+        conn.write_all(data.as_bytes()).await?;
+        Ok(())
+    }
 }
