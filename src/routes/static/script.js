@@ -24,7 +24,7 @@ function updateSliderDisplay(channel, value) {
   const numValue = parseFloat(value);
   rgbMult[channel] = numValue;
   document.getElementById(
-    `${channel === "brightness" ? "bright" : channel}-val`,
+    `${channel === "brightness" ? "bright" : channel}-val`
   ).textContent = numValue.toFixed(2);
   // No updateColorDisplay here!
 }
@@ -34,7 +34,7 @@ function updateMultAndSave(channel, value) {
   const numValue = parseFloat(value);
   rgbMult[channel] = numValue;
   document.getElementById(
-    `${channel === "brightness" ? "bright" : channel}-val`,
+    `${channel === "brightness" ? "bright" : channel}-val`
   ).textContent = numValue.toFixed(2);
 
   // Save immediately and let backend handle color update
@@ -74,9 +74,22 @@ function saveToSpoolman() {
   window.location.assign(`/spoolman/set?filament_id=${id}&value=${val}`);
 }
 
+function fetchWithTimeout(url, timeout = 1000) {
+  return Promise.race([
+    fetch(url),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error("Timeout")), timeout)
+    ),
+  ]);
+}
+
 function startPolling() {
+  fetchWithTimeout("/fallback")
+    .then((response) => response.text())
+    .then((data) => updateContent(data))
+    .catch((err) => console.warn("Polling error:", err));
   intervalId = setInterval(() => {
-    fetch("/fallback")
+    fetchWithTimeout("/fallback")
       .then((response) => response.text())
       .then((data) => updateContent(data))
       .catch((err) => console.warn("Polling error:", err));
@@ -133,8 +146,9 @@ function updateConfidence(sampleCount) {
   const maxSamples = 100; // Match the buffer size
   const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
 
-  document.getElementById("confidence-text").textContent =
-    `${percentage.toFixed(0)}%`;
+  document.getElementById(
+    "confidence-text"
+  ).textContent = `${percentage.toFixed(0)}%`;
   document.getElementById("confidence-fill").style.width = `${percentage}%`;
 }
 
