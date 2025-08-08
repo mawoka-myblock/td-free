@@ -27,6 +27,12 @@ jobs:
         with:
           toolchain: nightly-2025-06-28
           components: rustfmt, clippy
+      - name: Install Rust for Xtensa
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          version: "latest"
+          ldproxy: true
       - name: Setup | Std
         run: rustup component add rust-src --toolchain nightly-2025-06-28
       - uses: Swatinem/rust-cache@v2
