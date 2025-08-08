@@ -295,9 +295,11 @@ fn main() -> Result<(), ()> {
     let mut exit_buffer = [0u8; 1];
     serial_driver.read(&mut exit_buffer, 500).unwrap();
     let serial_future = {
+        logger.set_target_level("*", log::LevelFilter::Off).unwrap();
         async move {
             if exit_buffer.contains(&b'e') {
                 drop(serial_driver);
+                logger.set_target_level("*", log::LevelFilter::Off).unwrap();
                 log::info!("Logging reactivated!");
                 std::future::pending::<Result<(), anyhow::Error>>().await
             } else {
