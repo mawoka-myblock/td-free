@@ -11,6 +11,7 @@ use crate::helpers::nvs::RGBMultipliers;
 use crate::helpers::nvs::clear_rgb_multipliers_nvs;
 use crate::helpers::nvs::get_saved_algorithm_variables;
 use crate::helpers::nvs::get_saved_rgb_multipliers;
+use crate::helpers::readings::data_loop;
 use crate::helpers::serial::serial_connection;
 use core::fmt::Debug;
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -22,6 +23,8 @@ use edge_http::io::Error as EdgeError;
 use edge_http::io::server::Server;
 use edge_nal::TcpBind;
 
+use embassy_sync::blocking_mutex::raw::NoopRawMutex;
+use embassy_sync::channel::Channel;
 use embedded_hal::delay::DelayNs;
 use embedded_hal::pwm::SetDutyCycle;
 
@@ -41,11 +44,9 @@ use esp_idf_svc::{
     hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
 };
 
-use helpers::bitbang_i2c::HardwareI2cInstance;
 use helpers::bitbang_i2c::SimpleBitBangI2cInstance;
 use log::info;
 use smart_leds::RGB8;
-use veml7700::Veml7700;
 use wifi::WifiEnum;
 use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
@@ -266,21 +267,18 @@ fn main() -> Result<(), ()> {
         },
     ));
 
+    let measurement_channel = Arc::new(Channel::<NoopRawMutex, Option<String>, 1>::new());
+
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
     let server_data = ServerRunData {
-        veml: veml_res.veml7700.clone(),
-        veml_rgb: veml_res.veml3328.clone(), // TODO
-        dark_baseline_reading,
-        baseline_reading,
+        veml_rgb: veml_res.veml3328.clone(),
         rgb_baseline: rgb_white_balance, // Use white balance instead of rgb_baseline TODO
         dark_rgb_baseline,               // TODO
         wifi_status: wifi_status.clone(),
-        led_light: led_light.clone(),
         nvs: arced_nvs.clone(),
-        ws2812b: ws2812.clone(),
-        saved_algorithm,
         saved_rgb_multipliers: *saved_rgb_multipliers.lock().unwrap(),
+        ext_channel: measurement_channel.clone(),
     };
     let server_future = run(server_data, &stack, &mut server);
 
@@ -293,49 +291,69 @@ fn main() -> Result<(), ()> {
     )
     .unwrap();
     let mut exit_buffer = [0u8; 1];
+    FreeRtos.delay_ms(500);
     serial_driver.read(&mut exit_buffer, 500).unwrap();
+    let cloned_serial_led = ws2812.clone();
+    let cloned_mes_channel = measurement_channel.clone();
     let serial_future = {
-        logger.set_target_level("*", log::LevelFilter::Off).unwrap();
         async move {
             if exit_buffer.contains(&b'e') {
                 drop(serial_driver);
-                logger.set_target_level("*", log::LevelFilter::Off).unwrap();
-                log::info!("Logging reactivated!");
                 std::future::pending::<Result<(), anyhow::Error>>().await
             } else {
-                //log::warn!("Logging deactivated from now on, this is last log message!");
-                //logger.set_target_level("*", log::LevelFilter::Off).unwrap();
-                serial_connection(&mut serial_driver).await
+                serial_connection(&mut serial_driver, cloned_serial_led, cloned_mes_channel).await
             }
         }
     };
+    let ws_rgb_data = match veml_res.veml3328.clone() {
+        Some(some_veml_rgb) => Some(RgbWsHandler {
+            dark_rgb_baseline: dark_rgb_baseline.unwrap(),
+            rgb_baseline: rgb_white_balance.unwrap(),
+            rgb_buffers: Arc::new(Mutex::new((
+                median_buffer::RunningMedianBufferU16::new(100),
+                median_buffer::RunningMedianBufferU16::new(100),
+                median_buffer::RunningMedianBufferU16::new(100),
+            ))),
+            veml_rgb: some_veml_rgb,
+        }),
+        None => None,
+    };
+    let measurement_future = data_loop(
+        veml_res.veml7700.clone(),
+        dark_baseline_reading,
+        baseline_reading,
+        wifi_status,
+        led_light,
+        ws2812,
+        saved_algorithm,
+        Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
+        ws_rgb_data,
+        saved_rgb_multipliers,
+        measurement_channel.clone(),
+    );
+    info!("Startup completed");
 
     // --- Run both server and serial connection ---
     esp_idf_svc::hal::task::block_on(async {
-        let _ = futures::future::join(server_future, serial_future).await;
+        let _ = futures::future::join3(server_future, serial_future, measurement_future).await;
     });
 
     Ok(())
 }
 
-pub struct ServerRunData<'a> {
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+pub struct ServerRunData {
     veml_rgb: Option<Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
     rgb_baseline: Option<(u16, u16, u16)>,
     dark_rgb_baseline: Option<(u16, u16, u16)>,
     wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
-    ws2812b: Arc<Mutex<LedType<'a>>>,
-    saved_algorithm: NvsData,
     saved_rgb_multipliers: RGBMultipliers,
+    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
 }
 
 #[allow(clippy::too_many_arguments)]
-pub async fn run<'a>(
-    data: ServerRunData<'a>,
+pub async fn run(
+    data: ServerRunData,
     stack: &edge_nal_std::Stack,
     server: &mut WsServer,
 ) -> Result<(), anyhow::Error> {
@@ -367,18 +385,13 @@ pub async fn run<'a>(
     };
 
     let handler = WsHandler {
-        veml: data.veml,
-        dark_baseline_reading: data.dark_baseline_reading,
-        baseline_reading: data.baseline_reading,
         wifi_status: data.wifi_status,
-        led_light: data.led_light,
         nvs: data.nvs,
-        ws2812b: data.ws2812b,
-        saved_algorithm: data.saved_algorithm,
         // Use smaller buffers to reduce memory usage
         lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
         rgb: ws_rgb_data,
         saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
+        ext_channel: data.ext_channel,
     };
 
     match server.run(None, acceptor, handler).await {
@@ -404,19 +417,14 @@ impl<C> From<C> for WsHandlerError<C> {
 // and by limiting the number of headers to 32 instead of 64
 type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 headers
 
-struct WsHandler<'a> {
-    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
-    dark_baseline_reading: f32,
-    baseline_reading: f32,
+struct WsHandler {
     wifi_status: Arc<Mutex<WifiEnum>>,
-    led_light: Arc<Mutex<LedcDriver<'a>>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
-    ws2812b: Arc<Mutex<LedType<'a>>>,
-    saved_algorithm: NvsData,
     // Add median buffers
     lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
     rgb: Option<RgbWsHandler>,
     saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
+    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
 }
 #[derive(Clone)]
 pub struct RgbWsHandler {

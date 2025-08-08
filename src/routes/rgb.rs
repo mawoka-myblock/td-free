@@ -10,7 +10,7 @@ use crate::{
 };
 use edge_http::io::Error as EdgeError;
 
-impl WsHandler<'_> {
+impl WsHandler {
     pub async fn get_rgb_multipliers<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,

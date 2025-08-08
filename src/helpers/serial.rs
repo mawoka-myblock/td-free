@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::{Arc, Mutex};
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -7,10 +7,14 @@ use esp_idf_svc::hal::usb_serial::UsbSerialDriver;
 use esp_idf_svc::io::Write;
 use std::sync::atomic::AtomicBool;
 
-use crate::helpers;
-use crate::helpers::readings::LAST_MEASUREMENT;
+use crate::led::set_led;
+use crate::{LedType, helpers};
 
-pub async fn serial_connection(conn: &mut UsbSerialDriver<'static>) -> Result<(), anyhow::Error> {
+pub async fn serial_connection(
+    conn: &mut UsbSerialDriver<'static>,
+    ws2812: Arc<Mutex<LedType<'static>>>,
+    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
+) -> Result<(), anyhow::Error> {
     let mut buffer = [0u8; 64];
     let trigger_measurement = Arc::new(AtomicBool::new(false));
     let trigger_clone = trigger_measurement.clone();
@@ -62,25 +66,34 @@ pub async fn serial_connection(conn: &mut UsbSerialDriver<'static>) -> Result<()
                 embassy_time::Timer::after_millis(500).await;
                 continue;
             }
+            set_led(ws2812.clone(), 100, 30, 255);
 
-            let last_measurement = LAST_MEASUREMENT.lock().unwrap();
-            if let Some(measurement) = &*last_measurement
-                && measurement.filament_inserted
-            {
-                let message = format!(
-                    "{},,,,{:.1},{:02X}{:02X}{:02X}\n",
-                    helpers::generate_random_11_digit_number(),
-                    measurement.td_value,
-                    measurement.r,
-                    measurement.g,
-                    measurement.b
-                );
-                send.send(message).await;
+            ext_channel.send(None).await;
+            embassy_time::Timer::after_millis(100).await;
+            let res = ext_channel.receive().await.unwrap_or_default();
+            if res == "no_filament" {
+                embassy_time::Timer::after_millis(500).await;
+                continue;
             }
+            let measurement = res.split(",").collect::<Vec<&str>>();
+            let message = format!(
+                "{},,,,{},000000\n",
+                helpers::generate_random_11_digit_number(),
+                measurement[0],
+            );
+            send.send(message).await;
 
             // The frontend is responsible for polling and updating the values.
             // We just need to wait and check periodically.
-            embassy_time::Timer::after_millis(300).await;
+            loop {
+                embassy_time::Timer::after_millis(1000).await;
+                ext_channel.send(None).await;
+                let res = ext_channel.receive().await;
+                if res.is_some() && res.unwrap() == "no_filament" {
+                    continue;
+                }
+                break;
+            }
         }
     };
 

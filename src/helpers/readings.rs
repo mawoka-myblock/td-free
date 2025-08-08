@@ -1,7 +1,9 @@
 use std::sync::{Arc, Mutex};
 
+use embassy_sync::{blocking_mutex::raw::NoopRawMutex, channel::Channel};
 use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::LedcDriver;
+use log::info;
 use once_cell::sync::Lazy;
 use veml7700::Veml7700;
 
@@ -23,17 +25,55 @@ use super::{
 // Static for concurrency control and caching last result
 pub static BUSY: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 pub static LAST_DATA: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+#[allow(clippy::too_many_arguments)]
 
-#[derive(Clone, Copy, Debug)]
-pub struct LastMeasurement {
-    pub td_value: f32,
-    pub r: u8,
-    pub g: u8,
-    pub b: u8,
-    pub filament_inserted: bool,
+pub async fn data_loop(
+    veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
+    dark_baseline_reading: f32,
+    baseline_reading: f32,
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    led_light: Arc<Mutex<LedcDriver<'_>>>,
+    ws2812: Arc<Mutex<LedType<'_>>>,
+    saved_algorithm: NvsData,
+    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
+    rgb_data: Option<RgbWsHandler>,
+    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
+    channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
+) {
+    loop {
+        let _ = channel.receive().await;
+        info!("Received request");
+        let lock = BUSY.try_lock();
+        let data = if let Ok(_guard) = lock {
+            // We got the lock, run the function and update LAST_DATA
+            let result = read_data_with_buffer(
+                veml.clone(),
+                dark_baseline_reading,
+                baseline_reading,
+                wifi_status.clone(),
+                led_light.clone(),
+                ws2812.clone(),
+                saved_algorithm,
+                lux_buffer.clone(),
+                rgb_data.clone(),
+                saved_rgb_multipliers.clone(),
+            )
+            .await
+            .unwrap_or_default();
+            {
+                let mut last = LAST_DATA.lock().unwrap();
+                *last = Some(result.clone());
+            }
+            result
+        } else {
+            // Already running, serve the last result if available
+            let last = LAST_DATA.lock().unwrap();
+            last.clone().unwrap_or_default()
+        };
+        channel.send(Some(data)).await;
+        embassy_time::Timer::after_millis(350).await;
+    }
 }
-
-pub static LAST_MEASUREMENT: Lazy<Mutex<Option<LastMeasurement>>> = Lazy::new(|| Mutex::new(None));
 
 #[allow(clippy::too_many_arguments)]
 pub async fn read_data_with_buffer(
@@ -147,22 +187,6 @@ pub async fn read_data_with_buffer(
                 buffers.2.clear();
             }
             None => (),
-        }
-
-        // Update last measurement cache
-        {
-            let mut last_measurement = LAST_MEASUREMENT.lock().unwrap();
-            if let Some(meas) = last_measurement.as_mut() {
-                meas.filament_inserted = false;
-            } else {
-                *last_measurement = Some(LastMeasurement {
-                    td_value: 0.0,
-                    r: 0,
-                    g: 0,
-                    b: 0,
-                    filament_inserted: false,
-                });
-            }
         }
 
         let wifi_stat = wifi_status.lock().unwrap();
@@ -297,18 +321,6 @@ pub async fn read_data_with_buffer(
             &multipliers,
         )
     };
-
-    // Update last measurement cache
-    {
-        let mut last_measurement = LAST_MEASUREMENT.lock().unwrap();
-        *last_measurement = Some(LastMeasurement {
-            td_value: adjusted_td_value,
-            r: r_final,
-            g: g_final,
-            b: b_final,
-            filament_inserted: true,
-        });
-    }
 
     // Create hex color string with corrected values
     let hex_color = format!("#{r_final:02X}{g_final:02X}{b_final:02X}");

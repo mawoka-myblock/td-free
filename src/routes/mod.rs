@@ -19,12 +19,7 @@ use esp_idf_svc::{
 use url::Url;
 
 use crate::{
-    EdgeError, WsHandler, WsHandlerError,
-    helpers::{
-        nvs::read_spoolman_data,
-        readings::{BUSY, LAST_DATA, read_data_with_buffer},
-    },
-    wifi::WifiEnum,
+    EdgeError, WsHandler, WsHandlerError, helpers::nvs::read_spoolman_data, wifi::WifiEnum,
 };
 
 static INDEX_HTML: &str = include_str!("static/index.html");
@@ -33,7 +28,7 @@ static SCRIPT_JS: &str = include_str!("static/script.js");
 static SCRIPT_CALIBRATE_JS: &str = include_str!("static/calibrate/script.js");
 static CALIBRATE_HTML: &str = include_str!("static/calibrate/index.html");
 
-impl WsHandler<'_> {
+impl WsHandler {
     pub async fn server_index_page<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -48,7 +43,7 @@ impl WsHandler<'_> {
     }
 }
 
-impl WsHandler<'_> {
+impl WsHandler {
     /*
        pub async fn spoolman_get_filaments<T, const N: usize>(
            &self,
@@ -201,7 +196,7 @@ impl WsHandler<'_> {
     }
 }
 
-impl WsHandler<'_> {
+impl WsHandler {
     pub async fn fallback_route<T, const N: usize>(
         &self,
         conn: &mut Connection<'_, T, N>,
@@ -210,33 +205,9 @@ impl WsHandler<'_> {
         T: Read + Write,
     {
         // Try to acquire the BUSY lock without blocking
-        let lock = BUSY.try_lock();
-        let data = if let Ok(_guard) = lock {
-            // We got the lock, run the function and update LAST_DATA
-            let result = read_data_with_buffer(
-                self.veml.clone(),
-                self.dark_baseline_reading,
-                self.baseline_reading,
-                self.wifi_status.clone(),
-                self.led_light.clone(),
-                self.ws2812b.clone(),
-                self.saved_algorithm,
-                self.lux_buffer.clone(),
-                self.rgb.clone(),
-                self.saved_rgb_multipliers.clone(),
-            )
-            .await
-            .unwrap_or_default();
-            {
-                let mut last = LAST_DATA.lock().unwrap();
-                *last = Some(result.clone());
-            }
-            result
-        } else {
-            // Already running, serve the last result if available
-            let last = LAST_DATA.lock().unwrap();
-            last.clone().unwrap_or_default()
-        };
+        self.ext_channel.send(None).await;
+        embassy_time::Timer::after_millis(100).await;
+        let data = self.ext_channel.receive().await.unwrap_or_default();
 
         conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
             .await?;
@@ -245,7 +216,7 @@ impl WsHandler<'_> {
     }
 }
 
-impl Handler for WsHandler<'_> {
+impl Handler for WsHandler {
     type Error<E>
         = WsHandlerError<EdgeError<E>>
     where

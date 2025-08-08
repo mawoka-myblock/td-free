@@ -17,7 +17,7 @@ use crate::{
     wifi,
 };
 
-impl WsHandler<'_> {
+impl WsHandler {
     pub async fn wifi_route<T, const N: usize>(
         &self,
         path: &str,
