@@ -19,6 +19,8 @@ jobs:
       matrix:
         debug_enabled: [true, false]
     runs-on: ubuntu-22.04
+    env:
+      MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
 
     steps:
       - name: Setup | Rust
