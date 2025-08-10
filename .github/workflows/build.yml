@@ -75,6 +75,9 @@ jobs:
       - name: Build | Compile (production)
         run: |
           export VERSION=${BRANCH}@${SHA_SHORT}
+          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
+            export VERSION="${VERSION}_debug"
+          fi
           cargo build --release
         env:
           BRANCH: ${{ env.branch }}
@@ -84,5 +87,10 @@ jobs:
         run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
       - name: Upload file
         run: |
-          $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}_debug.bin
-          $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest_debug.bin
+          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}_debug.bin
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest_debug.bin
+          else
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/${{ env.branch }}/td-free-latest.bin
+          fi

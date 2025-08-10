@@ -14,11 +14,45 @@ permissions:
 jobs:
   compile:
     name: Compile
+    strategy:
+      fail-fast: true
+      matrix:
+        debug_enabled: [true, false]
     runs-on: ubuntu-22.04
 
     steps:
+      - name: Setup | Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2025-06-28
+          components: rustfmt, clippy
+      - name: Install Rust for Xtensa
+        uses: esp-rs/xtensa-toolchain@v1.5
+        with:
+          default: true
+          version: "latest"
+          ldproxy: true
+      - name: Setup | Std
+        run: rustup component add rust-src --toolchain nightly-2025-06-28
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Cargo-Binstall
+        uses: cargo-bins/cargo-binstall@main
+      - name: Install ESPflash
+        run: cargo binstall espflash@=3.3.0 --no-confirm --force
       - name: Setup | Checkout
         uses: actions/checkout@v4
+
+      - name: Install MinIO Client
+        run: |
+          curl https://dl.min.io/client/mc/release/linux-amd64/mc --create-dirs -o $HOME/minio-binaries/mc
+          chmod +x $HOME/minio-binaries/mc
+      - name: Set MinIO Client Up
+        run: |
+          $HOME/minio-binaries/mc alias set deploy $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
+        env:
+          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
+          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
+          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
 
       - name: Extract version from tag
         id: extract_version
@@ -27,40 +61,18 @@ jobs:
           BASE_VERSION="${{ github.ref_name }}"
           VERSION=${BASE_VERSION#v}
           echo "version=$VERSION" >> $GITHUB_ENV
-
       - name: Update version in Cargo.toml
         run: |
           sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
         env:
           VERSION: ${{ env.version }}
-
-      # fixes missing libclang error
-      # - name: Setup | libncurses5
-      #   run: sudo apt-get install libncurses5
-
-      - name: Setup | Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-2025-06-28
-          components: rustfmt, clippy
-
-      - name: Setup | Std
-        run: rustup component add rust-src --toolchain nightly-2025-06-28
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install Rust for Xtensa
-        uses: esp-rs/xtensa-toolchain@v1.5
-        with:
-          default: true
-          version: "latest"
-          ldproxy: true
-      - name: Install Cargo-Binstall
-        uses: cargo-bins/cargo-binstall@main
-      - name: Install ESPflash
-        run: cargo binstall espflash@=3.3.0 --no-confirm
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@v2
+      - name: Prepare Debug Config # Remove CONFIG_LOG_DEFAULT_LEVEL_NONE=y from sdkconfig.defaults
+        if: matrix.debug_enabled == true
+        run: |
+          if grep -q "CONFIG_LOG_DEFAULT_LEVEL_NONE=y" sdkconfig.defaults; then
+            sed -i '/CONFIG_LOG_DEFAULT_LEVEL_NONE=y/d' sdkconfig.defaults
+            echo "Removed CONFIG_LOG_DEFAULT_LEVEL_NONE=y from sdkconfig.defaults"
+          fi
 
       # - name: Setup | ldproxy
       #   run: cargo install ldproxy
@@ -68,14 +80,38 @@ jobs:
         run: |
           BASE_VERSION="${{ github.ref_name }}"
           export VERSION=${BASE_VERSION#v}
+          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
+            export VERSION="${VERSION}_debug"
+          fi
           cargo build --release
         env:
           VERSION: ${{ env.version }}
 
       - name: Merge Binary
         run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
-      - name: Release
+      - name: Upload file
+        run: |
+          BASE_VERSION="${{ github.ref_name }}"
+          export VERSION=${BASE_VERSION#v}
+          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-${VERSION}_debug.bin
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-latest_debug.bin
+          else
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-${VERSION}.bin
+            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-latest.bin
+          fi
+      - name: Rename file to Debug
+        if: matrix.debug_enabled == true
+        run: mv td-free.bin td-free_debug.bin
+      - name: Release Prod
+        if: matrix.debug_enabled == false
         uses: softprops/action-gh-release@v2
         with:
           append_body: true
           files: td-free.bin
+      - name: Release Debug
+        if: matrix.debug_enabled == true
+        uses: softprops/action-gh-release@v2
+        with:
+          append_body: true
+          files: td-free_debug.bin
