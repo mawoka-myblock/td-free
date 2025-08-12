@@ -1,5 +1,6 @@
 #![feature(iter_intersperse)]
 #![allow(clippy::await_holding_lock)]
+#![feature(impl_trait_in_assoc_type)]
 
 use crate::helpers::baseline_readings::take_baseline_reading;
 use crate::helpers::baseline_readings::take_rgb_white_balance_calibration;
@@ -15,6 +16,13 @@ use crate::helpers::readings::data_loop;
 use crate::helpers::serial::serial_connection;
 use core::fmt::Debug;
 use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use edge_nal_std::Stack;
+use embassy_time::Duration;
+use picoserve::AppWithStateBuilder;
+use picoserve::extract::State;
+use picoserve::response::IntoResponse;
+use picoserve::routing::PathRouter;
+use picoserve::{AppBuilder, AppRouter, make_static, routing::get};
 
 use std::str;
 use std::sync::{Arc, Mutex};
@@ -322,16 +330,37 @@ fn main() -> Result<(), ()> {
         veml_res.veml7700.clone(),
         dark_baseline_reading,
         baseline_reading,
-        wifi_status,
+        wifi_status.clone(),
         led_light,
         ws2812,
         saved_algorithm,
         Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
-        ws_rgb_data,
-        saved_rgb_multipliers,
+        ws_rgb_data.clone(),
+        saved_rgb_multipliers.clone(),
         measurement_channel.clone(),
     );
     info!("Startup completed");
+
+    let app = make_static!(AppRouter<AppProps>, AppProps.build_app());
+    let state = AppState {
+        ext_channel: measurement_channel.clone(),
+        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
+        nvs: arced_nvs.clone(),
+        rgb: ws_rgb_data,
+        saved_rgb_multipliers: Arc::new(Mutex::new(*saved_rgb_multipliers.lock().unwrap())),
+        wifi_status: wifi_status.clone(),
+    };
+
+    let config = make_static!(
+        picoserve::Config<Duration>,
+        picoserve::Config::new(picoserve::Timeouts {
+            start_read_request: Some(Duration::from_secs(5)),
+            persistent_start_read_request: Some(Duration::from_secs(1)),
+            read_request: Some(Duration::from_secs(1)),
+            write: Some(Duration::from_secs(1)),
+        })
+        .keep_connection_alive()
+    );
 
     // --- Run both server and serial connection ---
     esp_idf_svc::hal::task::block_on(async {
@@ -339,6 +368,59 @@ fn main() -> Result<(), ()> {
     });
 
     Ok(())
+}
+
+const WEB_TASK_POOL_SIZE: usize = 8;
+
+async fn web_task(
+    id: usize,
+    stack: Stack,
+    app: &'static AppRouter<AppProps>,
+    config: &'static picoserve::Config<Duration>,
+    state: AppState,
+) -> ! {
+    let port = 80;
+    let mut tcp_rx_buffer = [0; 1024];
+    let mut tcp_tx_buffer = [0; 1024];
+    let mut http_buffer = [0; 2048];
+
+    picoserve::listen_and_serve_with_state(
+        id,
+        app,
+        config,
+        stack,
+        port,
+        &mut tcp_rx_buffer,
+        &mut tcp_tx_buffer,
+        &mut http_buffer,
+        &state,
+    )
+    .await
+}
+
+#[derive(Clone)]
+struct AppState {
+    wifi_status: Arc<Mutex<WifiEnum>>,
+    nvs: Arc<EspNvsPartition<NvsDefault>>,
+    // Add median buffers
+    lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
+    rgb: Option<RgbWsHandler>,
+    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
+    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
+}
+
+struct AppProps;
+
+impl AppWithStateBuilder for AppProps {
+    type State = AppState;
+    type PathRouter = impl PathRouter<AppState>;
+
+    fn build_app(self) -> picoserve::Router<Self::PathRouter, Self::State> {
+        picoserve::Router::new().route(
+            "/",
+            get(|State(state): State<Self::State>| async move { "Hello World" }),
+        )
+    }
 }
 
 pub struct ServerRunData {
@@ -351,81 +433,6 @@ pub struct ServerRunData {
     ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    data: ServerRunData,
-    stack: &edge_nal_std::Stack,
-    server: &mut WsServer,
-) -> Result<(), anyhow::Error> {
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
-
-    log::info!("Running HTTP server on {addr}");
-    log::info!(
-        "Loaded RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}",
-        data.saved_rgb_multipliers.red,
-        data.saved_rgb_multipliers.green,
-        data.saved_rgb_multipliers.blue,
-        data.saved_rgb_multipliers.brightness,
-        data.saved_rgb_multipliers.td_reference
-    );
-
-    let acceptor = stack.bind(addr).await?;
-    let ws_rgb_data = match data.veml_rgb {
-        Some(some_veml_rgb) => Some(RgbWsHandler {
-            dark_rgb_baseline: data.dark_rgb_baseline.unwrap(),
-            rgb_baseline: data.rgb_baseline.unwrap(),
-            rgb_buffers: Arc::new(Mutex::new((
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-            ))),
-            veml_rgb: some_veml_rgb,
-        }),
-        None => None,
-    };
-
-    let handler = WsHandler {
-        wifi_status: data.wifi_status,
-        nvs: data.nvs,
-        // Use smaller buffers to reduce memory usage
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
-        rgb: ws_rgb_data,
-        saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
-        ext_channel: data.ext_channel,
-    };
-
-    match server.run(None, acceptor, handler).await {
-        Ok(_) => (),
-        Err(e) => log::error!("server.run: {e:?}"),
-    };
-
-    Ok(())
-}
-
-#[derive(Debug)]
-enum WsHandlerError<C> {
-    Connection(C),
-}
-
-impl<C> From<C> for WsHandlerError<C> {
-    fn from(e: C) -> Self {
-        Self::Connection(e)
-    }
-}
-
-// Reduce the size of the future by using max 2 handler instead of 4
-// and by limiting the number of headers to 32 instead of 64
-type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 headers
-
-struct WsHandler {
-    wifi_status: Arc<Mutex<WifiEnum>>,
-    nvs: Arc<EspNvsPartition<NvsDefault>>,
-    // Add median buffers
-    lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
-    rgb: Option<RgbWsHandler>,
-    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
-    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
-}
 #[derive(Clone)]
 pub struct RgbWsHandler {
     pub rgb_baseline: (u16, u16, u16),

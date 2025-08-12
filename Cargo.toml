@@ -46,12 +46,16 @@ async-std = { version = "1.13" }
 smart-leds = "*"
 ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
 embedded-svc = { version = "*" }
-serde = { version = "*" }
-serde_json = { version = "*" }
+# serde_json = { version = "*" }
 libm = "0.2"
 nb = "1.1"
 futures = "0.3"
 once_cell = "1.19"
+picoserve = { version = "*", features = ["embassy", "log", "std"] }
+serde-json-core = { version = "*" }
+serde = { version = "1.0", default-features = false }
+static_cell = "2.1.1"
+embassy-net = { version = "*", features = ["dhcpv4", "dns", "tcp", "udp"] }
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }

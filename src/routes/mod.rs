@@ -16,10 +16,27 @@ use esp_idf_svc::{
     http::{Method, client::EspHttpConnection},
     io::Write as _,
 };
+use picoserve::{
+    AppWithStateBuilder,
+    extract::{Json, Query, State},
+    response::{Body, HeadersIter, Response, StatusCode},
+    routing::{PathRouter, get, post},
+};
 use url::Url;
 
 use crate::{
-    EdgeError, WsHandler, WsHandlerError, helpers::nvs::read_spoolman_data, wifi::WifiEnum,
+    AppProps, AppState, EdgeError, WsHandler, WsHandlerError,
+    helpers::nvs::read_spoolman_data,
+    routes::{
+        config::{
+            AlgoQueryParams, WifiRouteParams, algorithm_route, read_config_route, wifi_route,
+        },
+        rgb::{
+            AutoCalibrateGrayInput, SetRgbMultiplierJsonData, auto_calibrate_gray_reference,
+            get_rgb_multipliers, set_rgb_multipliers,
+        },
+    },
+    wifi::WifiEnum,
 };
 
 static INDEX_HTML: &str = include_str!("static/index.html");
@@ -27,21 +44,6 @@ static STYLE_CSS: &str = include_str!("static/style.css");
 static SCRIPT_JS: &str = include_str!("static/script.js");
 static SCRIPT_CALIBRATE_JS: &str = include_str!("static/calibrate/script.js");
 static CALIBRATE_HTML: &str = include_str!("static/calibrate/index.html");
-
-impl WsHandler {
-    pub async fn server_index_page<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-            .await?;
-        conn.write_all(INDEX_HTML.as_bytes()).await?;
-        Ok(())
-    }
-}
 
 impl WsHandler {
     /*
@@ -196,91 +198,88 @@ impl WsHandler {
     }
 }
 
-impl WsHandler {
-    pub async fn fallback_route<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        // Try to acquire the BUSY lock without blocking
-        self.ext_channel.send(None).await;
-        embassy_time::Timer::after_millis(100).await;
-        let data = self.ext_channel.receive().await.unwrap_or_default();
-
-        conn.initiate_response(200, None, &[("Content-Type", "text/raw")])
-            .await?;
-        conn.write_all(data.as_ref()).await?;
-        Ok(())
-    }
+pub async fn fallback_route(state: AppState) -> Response<impl HeadersIter, impl Body> {
+    // Try to acquire the BUSY lock without blocking
+    state.ext_channel.send(None).await;
+    embassy_time::Timer::after_millis(100).await;
+    let data = state.ext_channel.receive().await.unwrap_or_default();
+    return Response::new(StatusCode::OK, data).with_header("Content-Type", "text/raw");
 }
 
-impl Handler for WsHandler {
-    type Error<E>
-        = WsHandlerError<EdgeError<E>>
-    where
-        E: Debug;
-
-    async fn handle<T, const N: usize>(
-        &self,
-        _task_id: impl Display + Clone,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), Self::Error<T::Error>>
-    where
-        T: Read + Write,
-    {
-        let headers: &edge_http::RequestHeaders<'_, N> = conn.headers()?;
-
-        if headers.method != EdgeMethod::Get && headers.method != EdgeMethod::Post {
-            conn.initiate_response(405, Some("Method Not Allowed"), &[])
-                .await?;
-        } else if headers.path == "/" || headers.path.is_empty() {
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(INDEX_HTML.as_bytes()).await?;
-            WsHandler::server_index_page(self, conn).await?;
-        } else if headers.path == "/style.css" {
-            conn.initiate_response(200, None, &[("Content-Type", "text/css")])
-                .await?;
-            conn.write_all(STYLE_CSS.as_bytes()).await?;
-        } else if headers.path == "/script.js" {
-            conn.initiate_response(200, None, &[("Content-Type", "application/javascript")])
-                .await?;
-            conn.write_all(SCRIPT_JS.as_bytes()).await?;
-        } else if headers.path == "/calibrate/script.js" {
-            conn.initiate_response(200, None, &[("Content-Type", "application/javascript")])
-                .await?;
-            conn.write_all(SCRIPT_CALIBRATE_JS.as_bytes()).await?;
-        } else if headers.path == "/calibrate" {
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(CALIBRATE_HTML.as_bytes()).await?;
-        } else if headers.path.starts_with("/settings") {
-            WsHandler::algorithm_route(self, headers.path, conn).await?;
-        } else if headers.path.starts_with("/wifi") {
-            WsHandler::wifi_route(self, headers.path, conn).await?;
-        } else if headers.path.starts_with("/fallback") {
-            WsHandler::fallback_route(self, conn).await?;
-        } else if headers.path.starts_with("/spoolman/set") {
-            WsHandler::spoolman_set_filament(self, headers.path, conn).await?;
-        } else if headers.path == "/rgb_multipliers" {
-            if headers.method == EdgeMethod::Get {
-                WsHandler::get_rgb_multipliers(self, conn).await?;
-            } else if headers.method == EdgeMethod::Post {
-                WsHandler::set_rgb_multipliers(self, conn).await?;
-            }
-        } else if headers.path == "/auto_calibrate" && headers.method == EdgeMethod::Post {
-            WsHandler::auto_calibrate_gray_reference(self, conn).await?;
-        } else if headers.path == "/config" && headers.method == EdgeMethod::Get {
-            WsHandler::read_config_route(self, conn).await?;
-        }
-        /*else if headers.path.starts_with("/spoolman/filaments") {
-            WsHandler::spoolman_get_filaments(self, conn).await?;
-        } */
-        else {
-            conn.initiate_response(404, Some("Not found"), &[]).await?;
-        }
-        Ok(())
-    }
+pub async fn get_router() -> picoserve::Router<impl PathRouter<AppState>, AppState> {
+    picoserve::Router::new()
+        .route(
+            "/",
+            get(|| async move {
+                Response::new(StatusCode::OK, INDEX_HTML).with_header("Content-Type", "text/html")
+            }),
+        )
+        .route(
+            "/style.css",
+            get(|| async move {
+                Response::new(StatusCode::OK, STYLE_CSS).with_header("Content-Type", "text/css")
+            }),
+        )
+        .route(
+            "/script.js",
+            get(|| async move {
+                Response::new(StatusCode::OK, SCRIPT_JS)
+                    .with_header("Content-Type", "application/javascript")
+            }),
+        )
+        .route(
+            "/calibrate/script.js",
+            get(|| async move {
+                Response::new(StatusCode::OK, SCRIPT_CALIBRATE_JS)
+                    .with_header("Content-Type", "application/javascript")
+            }),
+        )
+        .route(
+            "/calibrate",
+            get(|| async move {
+                Response::new(StatusCode::OK, CALIBRATE_HTML)
+                    .with_header("Content-Type", "text/html")
+            }),
+        )
+        .route(
+            "/settings",
+            get(
+                |State(state): State<AppState>, Query(query): Query<AlgoQueryParams>| async move {
+                    // algorithm_route(state, query)
+                    algorithm_route(state, query).await
+                },
+            ), // TODO
+        )
+        .route(
+            "/wifi",
+            get(
+                |State(state): State<AppState>, Query(query): Query<WifiRouteParams>| async move {
+                    wifi_route(state, query).await
+                },
+            ), // TODO
+        )
+        .route(
+            "/falback",
+            get(|State(state): State<AppState>| async move { fallback_route(state).await }), // TODO
+        )
+        // .route(
+        //     "/spoolman/set",
+        //     get(|State(state): State<AppState>| async move { "Hello World" }), // TODO
+        // )
+        .route(
+            "/rgb_multipliers",
+            get(|State(state): State<AppState>| async move { get_rgb_multipliers(state).await }), // TODO
+        )
+        .route(
+            "/rgb_multipliers",
+            post(|State(state): State<AppState>, Json(data): Json<SetRgbMultiplierJsonData>| async move { set_rgb_multipliers(state, data).await }), // TODO
+        )
+        .route(
+            "/auto_calibrate",
+            get(|State(state): State<AppState>, Json(data): Json<AutoCalibrateGrayInput>| async move { auto_calibrate_gray_reference(state, data).await }), // TODO
+        )
+        .route(
+            "/config",
+            get(|State(state): State<AppState>| async move { read_config_route(state).await }), // TODO
+        )
 }
