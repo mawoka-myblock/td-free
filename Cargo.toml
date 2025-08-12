@@ -30,18 +30,18 @@ esp-idf-svc = { version = "0.51", features = [
 ] }
 embedded-hal = "1"
 heapless = "0.8"
-edge-http = "0.5.1"
-edge-captive = "0.5"
+edge-http = "0.6"
+# edge-captive = "0.5"
 edge-nal = "0.5"
-edge-ws = "0.4"
+edge-ws = "0.5"
 edge-nal-std = { version = "0.5", features = ["async-io-mini"] }
 embedded-io-async = "0.6"
 anyhow = "1"
 url = "2.5"
-veml7700 = "0.2.0"
+veml7700 = "0.3"
 embassy-time = { version = "0.4", features = ["log", "generic-queue-8"] }
 embassy-futures = "0.1"
-embassy-sync = "0.6"
+embassy-sync = "0.7"
 async-std = { version = "1.13" }
 smart-leds = "*"
 ws2812-esp32-rmt-driver = { version = "*", features = ["smart-leds-trait"] }
