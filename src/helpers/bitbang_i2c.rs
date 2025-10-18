@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex};
 
+use embassy_time::Timer;
 use esp_idf_svc::hal::{
     delay::Ets,
     gpio::{Gpio8, Gpio10, InputOutput, PinDriver, Pull},
@@ -61,30 +62,30 @@ impl embedded_hal::i2c::ErrorType for SimpleBitBangI2cInstance {
 
 impl SimpleBitBangI2cInstance {
     // Use timing based on VEML3328 datasheet - Standard Mode req^uirements
-    const DELAY_LOW_US: u32 = 5; // t(LOW) >= 4.7μs
-    const DELAY_HIGH_US: u32 = 5; // t(HIGH) >= 4.0μs
-    const DELAY_SETUP_US: u32 = 1; // t(SUDAT) >= 250ns
-    const DELAY_HOLD_US: u32 = 4; // t(HDDAT) <= 3450ns
-    const DELAY_BUF_US: u32 = 5; // t(BUF) >= 4.7μs
+    const DELAY_LOW_US: u64 = 5; // t(LOW) >= 4.7μs
+    const DELAY_HIGH_US: u64 = 5; // t(HIGH) >= 4.0μs
+    const DELAY_SETUP_US: u64 = 1; // t(SUDAT) >= 250ns
+    const DELAY_HOLD_US: u64 = 4; // t(HDDAT) <= 3450ns
+    const DELAY_BUF_US: u64 = 5; // t(BUF) >= 4.7μs
 
-    fn delay_low(&self) {
-        Ets::delay_us(Self::DELAY_LOW_US);
+    async fn delay_low(&self) {
+        Timer::after_micros(Self::DELAY_LOW_US).await;
     }
 
-    fn delay_high(&self) {
-        Ets::delay_us(Self::DELAY_HIGH_US);
+    async fn delay_high(&self) {
+        Timer::after_micros(Self::DELAY_HIGH_US).await;
     }
 
-    fn delay_setup(&self) {
-        Ets::delay_us(Self::DELAY_SETUP_US);
+    async fn delay_setup(&self) {
+        Timer::after_micros(Self::DELAY_SETUP_US).await;
     }
 
-    fn delay_hold(&self) {
-        Ets::delay_us(Self::DELAY_HOLD_US);
+    async fn delay_hold(&self) {
+        Timer::after_micros(Self::DELAY_HOLD_US).await;
     }
 
-    fn delay_buf(&self) {
-        Ets::delay_us(Self::DELAY_BUF_US);
+    async fn delay_buf(&self) {
+        Timer::after_micros(Self::DELAY_BUF_US).await;
     }
 
     // Simplified approach: use the InputOutput pins directly without mode conversion
@@ -132,80 +133,80 @@ impl SimpleBitBangI2cInstance {
         Ok(sda.is_high())
     }
 
-    fn start_condition(&mut self) -> Result<(), SimpleBitBangError> {
+    async fn start_condition(&mut self) -> Result<(), SimpleBitBangError> {
         // Initialize to idle state (both lines high)
         self.set_sda_high()?;
         self.set_scl_high()?;
-        self.delay_buf(); // t(BUF) bus free time
+        self.delay_buf().await; // t(BUF) bus free time
 
         // START condition: SDA goes low while SCL is high
         self.set_sda_low()?;
-        self.delay_hold(); // t(HDSTA) >= 4.0μs
+        self.delay_hold().await; // t(HDSTA) >= 4.0μs
         self.set_scl_low()?;
-        self.delay_setup(); // Setup time before first data bit
+        self.delay_setup().await; // Setup time before first data bit
         Ok(())
     }
 
-    fn stop_condition(&mut self) -> Result<(), SimpleBitBangError> {
+    async fn stop_condition(&mut self) -> Result<(), SimpleBitBangError> {
         // Ensure SDA is low first
         self.set_sda_low()?;
-        self.delay_setup();
+        self.delay_setup().await;
 
         // STOP condition: SCL goes high first, then SDA goes high
         self.set_scl_high()?;
-        self.delay_setup(); // t(SUSTO) >= 4.0μs
+        self.delay_setup().await; // t(SUSTO) >= 4.0μs
         self.set_sda_high()?;
-        self.delay_buf(); // t(BUF) bus free time
+        self.delay_buf().await; // t(BUF) bus free time
         Ok(())
     }
 
-    fn write_bit(&mut self, bit: bool) -> Result<(), SimpleBitBangError> {
+    async fn write_bit(&mut self, bit: bool) -> Result<(), SimpleBitBangError> {
         // Set SDA while SCL is low
         if bit {
             self.set_sda_high()?;
         } else {
             self.set_sda_low()?;
         }
-        self.delay_setup(); // t(SUDAT) >= 250ns
+        self.delay_setup().await; // t(SUDAT) >= 250ns
 
         // Clock the bit: SCL high
         self.set_scl_high()?;
-        self.delay_high(); // t(HIGH) >= 4.0μs
+        self.delay_high().await; // t(HIGH) >= 4.0μs
 
         // SCL low
         self.set_scl_low()?;
-        self.delay_low(); // t(LOW) >= 4.7μs
+        self.delay_low().await; // t(LOW) >= 4.7μs
         Ok(())
     }
 
-    fn read_bit(&mut self) -> Result<bool, SimpleBitBangError> {
+    async fn read_bit(&mut self) -> Result<bool, SimpleBitBangError> {
         // Release SDA to allow slave to control it
         self.set_sda_high()?;
-        self.delay_setup();
+        self.delay_setup().await;
 
         // Clock high and read
         self.set_scl_high()?;
-        self.delay_setup(); // Setup time before reading
+        self.delay_setup().await; // Setup time before reading
         let bit = self.read_sda()?;
-        self.delay_high(); // Complete high period
+        self.delay_high().await; // Complete high period
 
         // Clock low
         self.set_scl_low()?;
-        self.delay_low();
+        self.delay_low().await;
         Ok(bit)
     }
 
-    fn write_byte(&mut self, byte: u8) -> Result<bool, SimpleBitBangError> {
+    async fn write_byte(&mut self, byte: u8) -> Result<bool, SimpleBitBangError> {
         log::debug!("Writing I2C byte: 0x{byte:02X} (binary: {byte:08b})");
         // Send 8 bits, MSB first
         for i in 0..8 {
             let bit = (byte & (0x80 >> i)) != 0;
             log::debug!("  Bit {}: {}", i, if bit { 1 } else { 0 });
-            self.write_bit(bit)?;
+            self.write_bit(bit).await?;
         }
 
         // Read ACK/NACK
-        let ack = !self.read_bit()?; // ACK is low, NACK is high
+        let ack = !self.read_bit().await?; // ACK is low, NACK is high
         log::debug!(
             "Received ACK: {} ({})",
             ack,
@@ -214,26 +215,26 @@ impl SimpleBitBangI2cInstance {
         Ok(ack)
     }
 
-    fn read_byte(&mut self, send_ack: bool) -> Result<u8, SimpleBitBangError> {
+    async fn read_byte(&mut self, send_ack: bool) -> Result<u8, SimpleBitBangError> {
         let mut byte = 0u8;
 
         // Read 8 bits, MSB first
         for i in 0..8 {
-            if self.read_bit()? {
+            if self.read_bit().await? {
                 byte |= 0x80 >> i;
             }
         }
 
         // Send ACK/NACK
-        self.write_bit(!send_ack)?; // ACK is low, NACK is high
+        self.write_bit(!send_ack).await?; // ACK is low, NACK is high
         log::debug!("Read I2C byte: 0x{byte:02X} (binary: {byte:08b}), sent ACK: {send_ack}");
 
         Ok(byte)
     }
 }
 
-impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
-    fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
+impl embedded_hal_async::i2c::I2c for SimpleBitBangI2cInstance {
+    async fn read(&mut self, address: u8, read: &mut [u8]) -> Result<(), Self::Error> {
         if read.is_empty() {
             return Ok(());
         }
@@ -244,13 +245,13 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             read.len()
         );
 
-        self.start_condition()?;
+        self.start_condition().await?;
 
         // Send address with read bit (1)
         let addr_byte = (address << 1) | 0x01;
         log::debug!("Sending address byte for read: 0x{addr_byte:02X}");
-        if !self.write_byte(addr_byte)? {
-            self.stop_condition()?;
+        if !self.write_byte(addr_byte).await? {
+            self.stop_condition().await?;
             log::warn!("VEML3328 I2C NACK on address read: 0x{address:02X}");
             return Err(SimpleBitBangError::Nack);
         }
@@ -259,15 +260,15 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         let read_len = read.len();
         for (i, byte) in read.iter_mut().enumerate() {
             let is_last = i == read_len - 1;
-            *byte = self.read_byte(!is_last)?; // Send ACK for all but last byte
+            *byte = self.read_byte(!is_last).await?; // Send ACK for all but last byte
         }
 
-        self.stop_condition()?;
+        self.stop_condition().await?;
         log::debug!("I2C read completed: {read:?}");
         Ok(())
     }
 
-    fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
+    async fn write(&mut self, address: u8, write: &[u8]) -> Result<(), Self::Error> {
         if write.is_empty() {
             return Ok(());
         }
@@ -279,32 +280,32 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             write
         );
 
-        self.start_condition()?;
+        self.start_condition().await?;
 
         // Send address with write bit (0)
         let addr_byte = (address << 1) & 0xFE;
         log::debug!("Sending address byte for write: 0x{addr_byte:02X}");
-        if !self.write_byte(addr_byte)? {
-            self.stop_condition()?;
+        if !self.write_byte(addr_byte).await? {
+            self.stop_condition().await?;
             log::warn!("VEML3328 I2C NACK on address write: 0x{address:02X}");
             return Err(SimpleBitBangError::Nack);
         }
 
         // Send data bytes
         for &byte in write {
-            if !self.write_byte(byte)? {
-                self.stop_condition()?;
+            if !self.write_byte(byte).await? {
+                self.stop_condition().await?;
                 log::warn!("VEML3328 I2C NACK on data write: 0x{byte:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
         }
 
-        self.stop_condition()?;
+        self.stop_condition().await?;
         log::debug!("I2C write completed successfully");
         Ok(())
     }
 
-    fn write_read(
+    async fn write_read(
         &mut self,
         address: u8,
         write: &[u8],
@@ -320,21 +321,21 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
 
         // Write phase
         if !write.is_empty() {
-            self.start_condition()?;
+            self.start_condition().await?;
 
             // Send address with write bit (0)
             let addr_byte = (address << 1) & 0xFE;
             log::debug!("Sending address byte for write: 0x{addr_byte:02X}");
-            if !self.write_byte(addr_byte)? {
-                self.stop_condition()?;
+            if !self.write_byte(addr_byte).await? {
+                self.stop_condition().await?;
                 log::warn!("VEML3328 I2C NACK on address write: 0x{address:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
 
             // Send data bytes
             for &byte in write {
-                if !self.write_byte(byte)? {
-                    self.stop_condition()?;
+                if !self.write_byte(byte).await? {
+                    self.stop_condition().await?;
                     log::warn!("VEML3328 I2C NACK on data write: 0x{byte:02X}");
                     return Err(SimpleBitBangError::Nack);
                 }
@@ -343,13 +344,13 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
 
         // Read phase with repeated start
         if !read.is_empty() {
-            self.start_condition()?; // Repeated start
+            self.start_condition().await?; // Repeated start
 
             // Send address with read bit (1)
             let addr_byte = (address << 1) | 0x01;
             log::debug!("Sending address byte for read: 0x{addr_byte:02X}");
-            if !self.write_byte(addr_byte)? {
-                self.stop_condition()?;
+            if !self.write_byte(addr_byte).await? {
+                self.stop_condition().await?;
                 log::warn!("VEML3328 I2C NACK on address read: 0x{address:02X}");
                 return Err(SimpleBitBangError::Nack);
             }
@@ -358,16 +359,16 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
             let read_len = read.len();
             for (i, byte) in read.iter_mut().enumerate() {
                 let is_last = i == read_len - 1;
-                *byte = self.read_byte(!is_last)?; // Send ACK for all but last byte
+                *byte = self.read_byte(!is_last).await?; // Send ACK for all but last byte
             }
         }
 
-        self.stop_condition()?;
+        self.stop_condition().await?;
         log::debug!("I2C write_read completed: read data: {read:?}");
         Ok(())
     }
 
-    fn transaction(
+    async fn transaction(
         &mut self,
         address: u8,
         operations: &mut [embedded_hal::i2c::Operation<'_>],
@@ -375,10 +376,10 @@ impl embedded_hal::i2c::I2c for SimpleBitBangI2cInstance {
         for op in operations {
             match op {
                 embedded_hal::i2c::Operation::Read(buf) => {
-                    self.read(address, buf)?;
+                    self.read(address, buf).await?;
                 }
                 embedded_hal::i2c::Operation::Write(buf) => {
-                    self.write(address, buf)?;
+                    self.write(address, buf).await?;
                 }
             }
         }

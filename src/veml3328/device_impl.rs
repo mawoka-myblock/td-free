@@ -1,3 +1,5 @@
+use embassy_time::Timer;
+
 use crate::veml3328::{Error, VEML3328};
 
 const DEVICE_ADDRESS: u8 = 0x10;
@@ -43,7 +45,7 @@ impl Config {
 
 impl<I2C> VEML3328<I2C>
 where
-    I2C: embedded_hal::i2c::I2c,
+    I2C: embedded_hal_async::i2c::I2c,
 {
     pub fn new(i2c: I2C) -> Self {
         VEML3328 {
@@ -56,18 +58,18 @@ where
         self.i2c
     }
 
-    pub fn enable(&mut self) -> Result<(), Error<I2C::Error>> {
+    pub async fn enable(&mut self) -> Result<(), Error<I2C::Error>> {
         log::info!("Starting VEML3328 enable sequence...");
 
         // First, try a simple register read to test communication
-        match self.read_register(Register::ID_DATA) {
+        match self.read_register(Register::ID_DATA).await {
             Ok(id) => {
                 log::info!("VEML3328 Device ID before enable: 0x{id:04X}");
                 if id == 0x0000 {
                     log::error!("Device ID is 0x0000 - I2C communication failed!");
                     // Return a generic I2C error - we can't create the specific error type
                     // without knowing the concrete I2C implementation
-                    return Err(Error::I2C(self.i2c.write(0xFF, &[]).unwrap_err()));
+                    return Err(Error::I2C(self.i2c.write(0xFF, &[]).await.unwrap_err()));
                 }
             }
             Err(e) => {
@@ -77,7 +79,7 @@ where
         }
 
         // Try to read current config
-        let current_config = match self.read_register(Register::CONFIG) {
+        let current_config = match self.read_register(Register::CONFIG).await {
             Ok(cfg) => {
                 log::info!("Current config register: 0x{cfg:04X}");
                 cfg
@@ -101,25 +103,25 @@ where
             "Writing optimized config for color measurement: 0x{:04X}",
             config.bits
         );
-        self.set_config(config)?;
+        self.set_config(config).await?;
 
         // Add longer delay for sensor to stabilize with new settings
-        std::thread::sleep(std::time::Duration::from_millis(150));
+        Timer::after_millis(150).await;
 
         // Verify configuration was written
-        let read_config = self.read_register(Register::CONFIG)?;
+        let read_config = self.read_register(Register::CONFIG).await?;
         log::info!("VEML3328 Config after enable: 0x{read_config:04X}");
 
         // Verify device ID again after configuration
-        let final_id = self.read_register(Register::ID_DATA)?;
+        let final_id = self.read_register(Register::ID_DATA).await?;
         log::info!("VEML3328 Device ID after enable: 0x{final_id:04X}");
 
         // Take a few test readings to verify sensor is working
-        std::thread::sleep(std::time::Duration::from_millis(110)); // Wait for integration time
+        Timer::after_millis(110).await;
         match (
-            self.read_register(Register::R_DATA),
-            self.read_register(Register::G_DATA),
-            self.read_register(Register::B_DATA),
+            self.read_register(Register::R_DATA).await,
+            self.read_register(Register::G_DATA).await,
+            self.read_register(Register::B_DATA).await,
         ) {
             (Ok(r), Ok(g), Ok(b)) => {
                 log::info!("Initial color readings after enable: R={r}, G={g}, B={b}",);
@@ -135,43 +137,43 @@ where
         Ok(())
     }
 
-    pub fn disable(&mut self) -> Result<(), Error<I2C::Error>> {
+    pub async fn disable(&mut self) -> Result<(), Error<I2C::Error>> {
         // Power off by setting SD0 (bit 0)
         let config = self.config.with_high(0x0001);
-        self.set_config(config)
+        self.set_config(config).await
     }
 
-    pub fn read_red(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::R_DATA)
+    pub async fn read_red(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::R_DATA).await
     }
 
-    pub fn read_green(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::G_DATA)
+    pub async fn read_green(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::G_DATA).await
     }
 
-    pub fn read_blue(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::B_DATA)
+    pub async fn read_blue(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::B_DATA).await
     }
 
-    pub fn read_clear(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::C_DATA)
+    pub async fn read_clear(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::C_DATA).await
     }
 
-    pub fn read_ir(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::IR_DATA)
+    pub async fn read_ir(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::IR_DATA).await
     }
 
-    pub fn read_device_id(&mut self) -> Result<u16, Error<I2C::Error>> {
-        self.read_register(Register::ID_DATA)
+    pub async fn read_device_id(&mut self) -> Result<u16, Error<I2C::Error>> {
+        self.read_register(Register::ID_DATA).await
     }
 
-    fn set_config(&mut self, config: Config) -> Result<(), Error<I2C::Error>> {
-        self.write_register(Register::CONFIG, config.bits)?;
+    async fn set_config(&mut self, config: Config) -> Result<(), Error<I2C::Error>> {
+        self.write_register(Register::CONFIG, config.bits).await?;
         self.config = config;
         Ok(())
     }
 
-    fn write_register(&mut self, register: u8, value: u16) -> Result<(), Error<I2C::Error>> {
+    async fn write_register(&mut self, register: u8, value: u16) -> Result<(), Error<I2C::Error>> {
         let data = [register, value as u8, (value >> 8) as u8];
         log::debug!(
             "Writing to VEML3328 register 0x{:02X}: 0x{:04X} (bytes: [{}, {}, {}])",
@@ -182,21 +184,24 @@ where
             data[2]
         );
 
-        self.i2c.write(DEVICE_ADDRESS, &data).map_err(Error::I2C)?;
+        self.i2c
+            .write(DEVICE_ADDRESS, &data)
+            .await
+            .map_err(Error::I2C)?;
 
         // Add longer delay after write operation for bit-banged I2C
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        Timer::after_millis(10).await;
         Ok(())
     }
 
     //add debug function to read all 16 registers
-    pub fn read_all_registers(&mut self) -> Result<[u16; 16], Error<I2C::Error>> {
+    pub async fn read_all_registers(&mut self) -> Result<[u16; 16], Error<I2C::Error>> {
         let mut registers = [0u16; 16];
 
         log::info!("=== VEML3328 Register Dump (Bit-banged I2C) ===");
 
         // First verify device communication by reading ID
-        match self.read_register(Register::ID_DATA) {
+        match self.read_register(Register::ID_DATA).await {
             Ok(id) => log::info!("Device ID verification: 0x{id:04X}"),
             Err(e) => log::warn!("Failed to read device ID: {e:?}"),
         }
@@ -204,9 +209,9 @@ where
         // Read registers 0x00 to 0x0F (0-15)
         for i in 0..16 {
             // Add longer delay between register reads for bit-banged I2C
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            Timer::after_millis(5).await;
 
-            match self.read_register(i) {
+            match self.read_register(i).await {
                 Ok(value) => {
                     registers[i as usize] = value;
                     let register_name = match i {
@@ -232,16 +237,17 @@ where
         Ok(registers)
     }
 
-    fn read_register(&mut self, register: u8) -> Result<u16, Error<I2C::Error>> {
+    async fn read_register(&mut self, register: u8) -> Result<u16, Error<I2C::Error>> {
         let mut data = [0; 2];
 
         // Add small delay before read for bit-banged I2C stability
-        std::thread::sleep(std::time::Duration::from_millis(5));
+        Timer::after_millis(5).await;
 
         log::debug!("Reading VEML3328 register 0x{register:02X}");
 
         self.i2c
             .write_read(DEVICE_ADDRESS, &[register], &mut data)
+            .await
             .map_err(Error::I2C)?;
 
         // According to datasheet: data[0] = LSB (bits 7-0), data[1] = MSB (bits 15-8)

@@ -1,14 +1,14 @@
 use std::sync::{Arc, Mutex};
 
-use embedded_hal::delay::DelayNs;
-use esp_idf_svc::hal::{delay::FreeRtos, ledc::LedcDriver};
+use embassy_time::Timer;
+use esp_idf_svc::hal::ledc::LedcDriver;
 use veml7700::Veml7700;
 
 use crate::veml3328;
 
 use super::bitbang_i2c::{HardwareI2cInstance, SimpleBitBangI2cInstance};
 
-pub fn take_rgb_white_balance_calibration(
+pub async fn take_rgb_white_balance_calibration(
     veml_rgb: Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
 ) -> (u16, u16, u16) {
@@ -33,7 +33,7 @@ pub fn take_rgb_white_balance_calibration(
         }
 
         // Wait for LED to stabilize
-        FreeRtos.delay_ms(300);
+        Timer::after_millis(300).await;
 
         let mut r_readings: Vec<u16> = Vec::new();
         let mut g_readings: Vec<u16> = Vec::new();
@@ -43,10 +43,10 @@ pub fn take_rgb_white_balance_calibration(
         for i in 0..sample_count {
             let mut locked_veml = veml_rgb.lock().unwrap();
             match (
-                locked_veml.read_red(),
-                locked_veml.read_green(),
-                locked_veml.read_blue(),
-                locked_veml.read_clear(),
+                locked_veml.read_red().await,
+                locked_veml.read_green().await,
+                locked_veml.read_blue().await,
+                locked_veml.read_clear().await,
             ) {
                 (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
                     log::debug!(
@@ -65,7 +65,7 @@ pub fn take_rgb_white_balance_calibration(
                 }
             }
             drop(locked_veml);
-            FreeRtos.delay_ms(sample_delay);
+            Timer::after_millis(sample_delay as u64).await;
         }
 
         // Add readings from this brightness level to overall collection
@@ -120,7 +120,7 @@ pub fn take_rgb_white_balance_calibration(
     (corrected_r, corrected_g, corrected_b)
 }
 
-pub fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32 {
+pub async fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) -> f32 {
     let sample_count = 20;
     let sample_delay = 100u32; // Increased delay to ensure fresh readings
     let mut readings: Vec<f32> = Vec::with_capacity(sample_count as usize);
@@ -132,9 +132,9 @@ pub fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) ->
             Err(e) => {
                 log::error!("{e:?}");
                 veml.lock().unwrap().disable().unwrap();
-                FreeRtos.delay_ms(100);
+                Timer::after_millis(100).await;
                 veml.lock().unwrap().enable().unwrap();
-                FreeRtos.delay_ms(1000);
+                Timer::after_millis(1000).await;
                 continue;
             }
         };
@@ -142,7 +142,7 @@ pub fn take_baseline_reading(veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>) ->
         log::info!("Reading: {reading}");
         readings.push(reading);
         drop(locked_veml); // Release lock before delay
-        FreeRtos.delay_ms(sample_delay);
+        Timer::after_millis(sample_delay as u64).await;
     }
 
     if readings.is_empty() {

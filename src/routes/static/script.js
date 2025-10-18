@@ -24,7 +24,7 @@ function updateSliderDisplay(channel, value) {
   const numValue = parseFloat(value);
   rgbMult[channel] = numValue;
   document.getElementById(
-    `${channel === "brightness" ? "bright" : channel}-val`
+    `${channel === "brightness" ? "bright" : channel}-val`,
   ).textContent = numValue.toFixed(2);
   // No updateColorDisplay here!
 }
@@ -34,7 +34,7 @@ function updateMultAndSave(channel, value) {
   const numValue = parseFloat(value);
   rgbMult[channel] = numValue;
   document.getElementById(
-    `${channel === "brightness" ? "bright" : channel}-val`
+    `${channel === "brightness" ? "bright" : channel}-val`,
   ).textContent = numValue.toFixed(2);
 
   // Save immediately and let backend handle color update
@@ -74,32 +74,40 @@ function saveToSpoolman() {
   window.location.assign(`/spoolman/set?filament_id=${id}&value=${val}`);
 }
 
-function fetchWithTimeout(url, timeout = 1000) {
+function fetchWithTimeout(url, timeout = 3000) {
   return Promise.race([
     fetch(url),
     new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), timeout)
+      setTimeout(() => reject(new Error("Timeout")), timeout),
     ),
   ]);
 }
 
-function startPolling() {
-  fetchWithTimeout("/fallback")
-    .then((response) => response.text())
-    .then((data) => updateContent(data))
-    .catch((err) => console.warn("Polling error:", err));
-  intervalId = setInterval(() => {
-    fetchWithTimeout("/fallback")
-      .then((response) => response.text())
-      .then((data) => updateContent(data))
-      .catch((err) => console.warn("Polling error:", err));
-  }, 1000);
+async function startPolling() {
+  while (true) {
+    const startTime = Date.now();
+
+    try {
+      const response = await fetch("/fallback");
+      const data = await response.text();
+      updateContent(data);
+    } catch (err) {
+      console.warn("Polling error:", err);
+    }
+
+    const elapsed = Date.now() - startTime;
+    const delay = Math.max(1500 - elapsed, 0); // Wait at least 3200ms from start
+    await new Promise((res) => setTimeout(res, delay));
+  }
 }
 
 function updateContent(data) {
   const el = document.getElementById("content");
   const colorDisplay = document.getElementById("color-display");
   const confidenceIndicator = document.getElementById("confidence-indicator");
+  if (data === "") {
+    return;
+  }
 
   if (data === "no_filament") {
     document.getElementById("save-to-spoolman-btn").classList.add("hidden");
@@ -146,9 +154,8 @@ function updateConfidence(sampleCount) {
   const maxSamples = 100; // Match the buffer size
   const percentage = Math.min(100, (sampleCount / maxSamples) * 100);
 
-  document.getElementById(
-    "confidence-text"
-  ).textContent = `${percentage.toFixed(0)}%`;
+  document.getElementById("confidence-text").textContent =
+    `${percentage.toFixed(0)}%`;
   document.getElementById("confidence-fill").style.width = `${percentage}%`;
 }
 

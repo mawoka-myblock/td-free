@@ -230,20 +230,31 @@ function copyHex() {
     })
     .catch(() => alert("Color: " + hex));
 }
+async function startPolling() {
+  while (true) {
+    const startTime = Date.now();
 
-function startPolling() {
-  intervalId = setInterval(() => {
-    fetch("/fallback")
-      .then((response) => response.text())
-      .then((data) => updateContent(data))
-      .catch((err) => console.warn("Polling error:", err));
-  }, 1000);
+    try {
+      const response = await fetch("/fallback");
+      const data = await response.text();
+      updateContent(data);
+    } catch (err) {
+      console.warn("Polling error:", err);
+    }
+
+    const elapsed = Date.now() - startTime;
+    const delay = Math.max(1500 - elapsed, 0); // Wait at least 3200ms from start
+    await new Promise((res) => setTimeout(res, delay));
+  }
 }
 
 function updateContent(data) {
   const el = document.getElementById("content");
   const colorDisplay = document.getElementById("color-display");
   const confidenceIndicator = document.getElementById("confidence-indicator");
+  if (data === "") {
+    return;
+  }
 
   if (data === "no_filament") {
     colorDisplay.classList.add("hidden");

@@ -29,6 +29,7 @@ esp-idf-svc = { version = "0.51", features = [
     "critical-section",
 ] }
 embedded-hal = "1"
+embedded-hal-async = "1"
 heapless = "0.8"
 edge-http = "0.6"
 # edge-captive = "0.5"

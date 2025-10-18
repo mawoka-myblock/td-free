@@ -35,10 +35,10 @@ pub struct I2cInitResponse {
     pub is_old_pcb: bool,
 }
 
-pub fn initialize_veml(
+pub async fn initialize_veml(
     pins: Pins,
-    ws2812_old: Arc<Mutex<LedType>>,
-    ws2812_new: Arc<Mutex<LedType>>,
+    ws2812_old: Arc<Mutex<LedType<'_>>>,
+    ws2812_new: Arc<Mutex<LedType<'_>>>,
 ) -> I2cInitResponse {
     let hw_i2c = I2cDriver::new(pins.i2c, pins.sda1, pins.scl1, &create_i2c_config());
     let mut veml7700 = Veml7700::new(HardwareI2c::new(hw_i2c.unwrap()).clone_driver());
@@ -69,7 +69,7 @@ pub fn initialize_veml(
             veml7700: Arc::new(Mutex::new(veml)),
         };
     }
-    let rgb_veml = get_rgb_veml(pins.sda2, pins.scl2);
+    let rgb_veml = get_rgb_veml(pins.sda2, pins.scl2).await;
     I2cInitResponse {
         veml7700: Arc::new(Mutex::new(veml7700)),
         veml3328: rgb_veml,
@@ -78,7 +78,7 @@ pub fn initialize_veml(
     // Check if sda2 and scl2 are connected for rgb sensor
 }
 
-fn get_rgb_veml(
+async fn get_rgb_veml(
     sda: Gpio8,
     scl: Gpio10,
 ) -> Option<Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>> {
@@ -91,12 +91,12 @@ fn get_rgb_veml(
     std::thread::sleep(std::time::Duration::from_millis(20));
     let bitbang_i2c = SimpleBitBangI2c::new(sda_pin, scl_pin);
     let mut veml_rgb_temp = veml3328::VEML3328::new(bitbang_i2c.clone_driver());
-    if veml_rgb_temp.enable().is_err() {
+    if veml_rgb_temp.enable().await.is_err() {
         info!("Enable error!");
         return None;
     }
     std::thread::sleep(std::time::Duration::from_millis(20));
-    if let Ok(veml_id) = veml_rgb_temp.read_device_id() {
+    if let Ok(veml_id) = veml_rgb_temp.read_device_id().await {
         info!("id Check");
     /*        if veml_id != 0x28 {
         info!("Wrong ID, received 0x{veml_id:04X}");

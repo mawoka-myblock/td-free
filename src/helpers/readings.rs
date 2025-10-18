@@ -232,9 +232,9 @@ pub async fn read_data_with_buffer(
         if let Some(d) = rgb_data.clone() {
             let mut locked_rgb = d.veml_rgb.lock().unwrap();
             if let (Ok(r), Ok(g), Ok(b)) = (
-                locked_rgb.read_red(),
-                locked_rgb.read_green(),
-                locked_rgb.read_blue(),
+                locked_rgb.read_red().await,
+                locked_rgb.read_green().await,
+                locked_rgb.read_blue().await,
             ) {
                 log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
 
@@ -290,7 +290,10 @@ pub async fn read_data_with_buffer(
     // Read clear channel for brightness correction (RAW)
     let clear_median_raw = {
         let mut locked_rgb = rgb_d.veml_rgb.lock().unwrap();
-        locked_rgb.read_clear().unwrap_or(rgb_d.rgb_baseline.0)
+        locked_rgb
+            .read_clear()
+            .await
+            .unwrap_or(rgb_d.rgb_baseline.0)
     };
 
     log::debug!(

@@ -6,6 +6,8 @@ use crate::helpers::baseline_readings::take_rgb_white_balance_calibration;
 use crate::helpers::i2c_init::Pins;
 use crate::helpers::i2c_init::initialize_veml;
 use crate::helpers::median_buffer;
+use crate::helpers::median_buffer::RunningMedianBuffer;
+use crate::helpers::median_buffer::RunningMedianBufferU16;
 use crate::helpers::nvs::NvsData;
 use crate::helpers::nvs::RGBMultipliers;
 use crate::helpers::nvs::clear_rgb_multipliers_nvs;
@@ -130,7 +132,7 @@ fn main() -> Result<(), ()> {
         .unwrap()
         .write_nocopy(std::iter::repeat_n(RGB8::new(255, 255, 0), 1))
         .unwrap();
-    let veml_res = initialize_veml(
+    let veml_res = esp_idf_svc::hal::task::block_on(initialize_veml(
         Pins {
             i2c: peripherals.i2c0,
             sda1: peripherals.pins.gpio6,
@@ -140,7 +142,7 @@ fn main() -> Result<(), ()> {
         },
         ws2812_old.clone(),
         ws2812_new.clone(),
-    );
+    ));
     info!(
         "Old PCB? {}, Color? {}",
         veml_res.is_old_pcb,
@@ -209,20 +211,21 @@ fn main() -> Result<(), ()> {
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
     FreeRtos.delay_ms(500);
-    let baseline_reading: f32 = take_baseline_reading(veml_res.veml7700.clone());
+    let baseline_reading: f32 =
+        esp_idf_svc::hal::task::block_on(take_baseline_reading(veml_res.veml7700.clone()));
 
     // White balance calibration at 50% LED brightness
     let rgb_white_balance: Option<(u16, u16, u16)> = match veml_res.veml3328.clone() {
-        Some(d) => Some(take_rgb_white_balance_calibration(
-            d.clone(),
-            led_light.clone(),
+        Some(d) => Some(esp_idf_svc::hal::task::block_on(
+            take_rgb_white_balance_calibration(d.clone(), led_light.clone()),
         )),
         None => None,
     };
 
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(500);
-    let dark_baseline_reading: f32 = take_baseline_reading(veml_res.veml7700.clone());
+    let dark_baseline_reading: f32 =
+        esp_idf_svc::hal::task::block_on(take_baseline_reading(veml_res.veml7700.clone()));
 
     // For compatibility, we'll use the white balance as both baseline values
     let dark_rgb_baseline = rgb_white_balance;
@@ -271,12 +274,29 @@ fn main() -> Result<(), ()> {
 
     log::info!("Server created");
     let stack = edge_nal_std::Stack::new();
+    let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100)));
+    let rgb_buffers = Arc::new(Mutex::new((
+        median_buffer::RunningMedianBufferU16::new(100),
+        median_buffer::RunningMedianBufferU16::new(100),
+        median_buffer::RunningMedianBufferU16::new(100),
+    )));
+    let ws_rgb_data = match veml_res.veml3328.clone() {
+        Some(some_veml_rgb) => Some(RgbWsHandler {
+            dark_rgb_baseline: dark_rgb_baseline.unwrap(),
+            rgb_baseline: rgb_white_balance.unwrap(),
+            rgb_buffers: rgb_buffers.clone(),
+            veml_rgb: some_veml_rgb,
+        }),
+        None => None,
+    };
     let server_data = ServerRunData {
         veml_rgb: veml_res.veml3328.clone(),
         rgb_baseline: rgb_white_balance, // Use white balance instead of rgb_baseline TODO
         dark_rgb_baseline,               // TODO
         wifi_status: wifi_status.clone(),
         nvs: arced_nvs.clone(),
+        lux_buffer: lux_buffer.clone(),
+        rgb_buffers: rgb_buffers.clone(),
         saved_rgb_multipliers: *saved_rgb_multipliers.lock().unwrap(),
         ext_channel: measurement_channel.clone(),
     };
@@ -305,19 +325,7 @@ fn main() -> Result<(), ()> {
             }
         }
     };
-    let ws_rgb_data = match veml_res.veml3328.clone() {
-        Some(some_veml_rgb) => Some(RgbWsHandler {
-            dark_rgb_baseline: dark_rgb_baseline.unwrap(),
-            rgb_baseline: rgb_white_balance.unwrap(),
-            rgb_buffers: Arc::new(Mutex::new((
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-            ))),
-            veml_rgb: some_veml_rgb,
-        }),
-        None => None,
-    };
+
     let measurement_future = data_loop(
         veml_res.veml7700.clone(),
         dark_baseline_reading,
@@ -326,7 +334,7 @@ fn main() -> Result<(), ()> {
         led_light,
         ws2812,
         saved_algorithm,
-        Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
+        lux_buffer,
         ws_rgb_data,
         saved_rgb_multipliers,
         measurement_channel.clone(),
@@ -348,7 +356,15 @@ pub struct ServerRunData {
     wifi_status: Arc<Mutex<WifiEnum>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     saved_rgb_multipliers: RGBMultipliers,
+    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
     ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
+    rgb_buffers: Arc<
+        Mutex<(
+            RunningMedianBufferU16,
+            RunningMedianBufferU16,
+            RunningMedianBufferU16,
+        )>,
+    >,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -374,11 +390,7 @@ pub async fn run(
         Some(some_veml_rgb) => Some(RgbWsHandler {
             dark_rgb_baseline: data.dark_rgb_baseline.unwrap(),
             rgb_baseline: data.rgb_baseline.unwrap(),
-            rgb_buffers: Arc::new(Mutex::new((
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-                median_buffer::RunningMedianBufferU16::new(100),
-            ))),
+            rgb_buffers: data.rgb_buffers,
             veml_rgb: some_veml_rgb,
         }),
         None => None,
@@ -388,7 +400,7 @@ pub async fn run(
         wifi_status: data.wifi_status,
         nvs: data.nvs,
         // Use smaller buffers to reduce memory usage
-        lux_buffer: Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100))),
+        lux_buffer: data.lux_buffer,
         rgb: ws_rgb_data,
         saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
         ext_channel: data.ext_channel,

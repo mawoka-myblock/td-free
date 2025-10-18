@@ -1,5 +1,6 @@
 use edge_http::io::server::Connection;
 use embedded_io_async::{Read, Write};
+use log::info;
 
 use crate::{
     WsHandler, WsHandlerError,
@@ -230,6 +231,7 @@ impl WsHandler {
         // Get the current median lux for this material using the buffer median
         let current_lux = {
             let buffer = self.lux_buffer.lock().unwrap();
+            info!("Lux buffer calibrate reading {buffer:?}");
             let median = buffer.median();
             drop(buffer);
             if let Some(current_reading) = median {
