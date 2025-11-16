@@ -53,6 +53,7 @@ libm = "0.2"
 nb = "1.1"
 futures = "0.3"
 once_cell = "1.19"
+enumset = "*"
 
 [build-dependencies]
 embuild = { version = "0.33", features = ["espidf"] }

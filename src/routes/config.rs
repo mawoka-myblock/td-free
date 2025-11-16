@@ -14,82 +14,9 @@ use crate::{
         save_spoolman_data,
     },
     routes::serve::{serve_algo_setup_page, serve_wifi_setup_page},
-    wifi,
 };
 
 impl WsHandler {
-    pub async fn wifi_route<T, const N: usize>(
-        &self,
-        path: &str,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        let url = Url::parse(&format!("http://google.com{path}")).unwrap();
-        let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
-        let ssid = url_params.get("ssid");
-        let password = url_params.get("password");
-        if ssid.is_none() && password.is_none() {
-            let saved_ssid =
-                wifi::get_wifi_ssid(self.nvs.clone().as_ref().clone()).unwrap_or_default();
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(serve_wifi_setup_page(&saved_ssid, "").as_ref())
-                .await?;
-            return Ok(());
-        }
-        if ssid.is_none() {
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(serve_wifi_setup_page("", "SSID is not set").as_ref())
-                .await?;
-            return Ok(());
-        }
-        if password.is_none() {
-            conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                .await?;
-            conn.write_all(serve_wifi_setup_page("", "SSID is not set").as_ref())
-                .await?;
-            return Ok(());
-        }
-        match wifi::save_wifi_creds(
-            ssid.unwrap(),
-            password.unwrap(),
-            self.nvs.clone().as_ref().clone(),
-        ) {
-            Ok(_) => {
-                conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                    .await?;
-                conn.write_all(
-                    serve_wifi_setup_page(
-                        ssid.unwrap_or(&String::new()),
-                        "Saved successfully, resetting now",
-                    )
-                    .as_ref(),
-                )
-                .await?;
-                embassy_time::Timer::after_millis(50).await;
-                reset::restart();
-            }
-            Err(e) => {
-                conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-                    .await?;
-                conn.write_all(
-                    serve_wifi_setup_page(
-                        ssid.unwrap_or(&String::new()),
-                        "COULD NOT SAVE WIFI CREDENTIALS, resetting now",
-                    )
-                    .as_ref(),
-                )
-                .await?;
-                error!("{e:?}");
-                embassy_time::Timer::after_millis(50).await;
-                reset::restart();
-            }
-        };
-    }
-
     pub async fn algorithm_route<T, const N: usize>(
         &self,
         path: &str,

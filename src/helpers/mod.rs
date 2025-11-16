@@ -1,5 +1,6 @@
 pub mod baseline_readings;
 pub mod bitbang_i2c;
+pub mod bluetooth;
 pub mod i2c_init;
 pub mod median_buffer;
 pub mod nvs;

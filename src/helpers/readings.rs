@@ -14,7 +14,6 @@ use crate::{
         rgb::{apply_rgb_multipliers, apply_spectral_response_correction},
     },
     led::set_led,
-    wifi::WifiEnum,
 };
 
 use super::{
@@ -31,7 +30,6 @@ pub async fn data_loop(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
@@ -50,7 +48,6 @@ pub async fn data_loop(
                 veml.clone(),
                 dark_baseline_reading,
                 baseline_reading,
-                wifi_status.clone(),
                 led_light.clone(),
                 ws2812.clone(),
                 saved_algorithm,
@@ -80,7 +77,6 @@ pub async fn read_data_with_buffer(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     dark_baseline_reading: f32,
     baseline_reading: f32,
-    wifi_status: Arc<Mutex<WifiEnum>>,
     led_light: Arc<Mutex<LedcDriver<'_>>>,
     ws2812: Arc<Mutex<LedType<'_>>>,
     saved_algorithm: NvsData,
@@ -189,12 +185,6 @@ pub async fn read_data_with_buffer(
             None => (),
         }
 
-        let wifi_stat = wifi_status.lock().unwrap();
-        match *wifi_stat {
-            WifiEnum::Connected => set_led(ws2812.clone(), 0, 255, 0),
-            WifiEnum::HotSpot => set_led(ws2812.clone(), 255, 0, 255),
-            WifiEnum::Working => set_led(ws2812.clone(), 255, 255, 0),
-        }
         return Some("no_filament".to_string());
     }
 

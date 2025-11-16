@@ -18,9 +18,7 @@ use esp_idf_svc::{
 };
 use url::Url;
 
-use crate::{
-    EdgeError, WsHandler, WsHandlerError, helpers::nvs::read_spoolman_data, wifi::WifiEnum,
-};
+use crate::{EdgeError, WsHandler, WsHandlerError, helpers::nvs::read_spoolman_data};
 
 static INDEX_HTML: &str = include_str!("static/index.html");
 static STYLE_CSS: &str = include_str!("static/style.css");
@@ -106,13 +104,6 @@ impl WsHandler {
     where
         T: Read + Write,
     {
-        if *self.wifi_status.lock().unwrap() != WifiEnum::Connected {
-            conn.initiate_response(400, None, &[("Content-Type", "text/plain")])
-                .await?;
-            conn.write_all(r#"Not connected to station, Spoolman unavailable."#.as_ref())
-                .await?;
-            return Ok(());
-        }
         let url = Url::parse(&format!("http://google.com{path}")).unwrap();
         let url_params: HashMap<_, _> = url.query_pairs().into_owned().collect();
         let value = url_params.get("value");
@@ -258,8 +249,6 @@ impl Handler for WsHandler {
             conn.write_all(CALIBRATE_HTML.as_bytes()).await?;
         } else if headers.path.starts_with("/settings") {
             WsHandler::algorithm_route(self, headers.path, conn).await?;
-        } else if headers.path.starts_with("/wifi") {
-            WsHandler::wifi_route(self, headers.path, conn).await?;
         } else if headers.path.starts_with("/fallback") {
             WsHandler::fallback_route(self, conn).await?;
         } else if headers.path.starts_with("/spoolman/set") {

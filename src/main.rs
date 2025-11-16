@@ -3,6 +3,8 @@
 
 use crate::helpers::baseline_readings::take_baseline_reading;
 use crate::helpers::baseline_readings::take_rgb_white_balance_calibration;
+use crate::helpers::bluetooth::init_bt;
+use crate::helpers::bluetooth::server::RunData;
 use crate::helpers::i2c_init::Pins;
 use crate::helpers::i2c_init::initialize_veml;
 use crate::helpers::median_buffer;
@@ -49,7 +51,6 @@ use esp_idf_svc::{
 use helpers::bitbang_i2c::SimpleBitBangI2cInstance;
 use log::info;
 use smart_leds::RGB8;
-use wifi::WifiEnum;
 use ws2812_esp32_rmt_driver::LedPixelEsp32Rmt;
 use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
 
@@ -57,7 +58,6 @@ mod helpers;
 mod led;
 mod routes;
 mod veml3328;
-mod wifi;
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
 static RUSTC_VERSION: &str = env!("VERGEN_RUSTC_SEMVER");
@@ -156,57 +156,8 @@ fn main() -> Result<(), ()> {
 
     let nvs = EspDefaultNvsPartition::take().unwrap();
     let timer_service = EspTaskTimerService::new().unwrap();
-    // let driver = EspWifi::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
-    let wifi_raw_driver =
-        WifiDriver::new(peripherals.modem, sysloop.clone(), Some(nvs.clone())).unwrap();
-    let driver = EspWifi::wrap_all(
-        wifi_raw_driver,
-        EspNetif::new_with_conf(&NetifConfiguration {
-            ip_configuration: Some(IpConfiguration::Client(IpClientConfiguration::DHCP(
-                DHCPClientSettings {
-                    hostname: Some("tdfree".try_into().unwrap()),
-                },
-            ))),
-            ..NetifConfiguration::wifi_default_client()
-        })
-        .unwrap(),
-        EspNetif::new_with_conf(&NetifConfiguration {
-            ip_configuration: Some(ipv4::Configuration::Router(RouterConfiguration {
-                subnet: Subnet {
-                    gateway: IP_ADDRESS,
-                    mask: Mask(24),
-                },
-                dhcp_enabled: true,
-                dns: Some(IP_ADDRESS),
-                secondary_dns: Some(IP_ADDRESS),
-            })),
-            ..NetifConfiguration::wifi_default_router()
-        })
-        .unwrap(),
-    )
-    .unwrap();
-    let wifi = AsyncWifi::wrap(driver, sysloop, timer_service).unwrap();
-
-    let wifi_status: Arc<Mutex<WifiEnum>> = Arc::new(Mutex::new(WifiEnum::Working));
-    let wifi = Arc::new(Mutex::new(wifi));
-
-    // Spawn WiFi thread for background management
-    let wifi_status_clone = wifi_status.clone();
-    let wifi_clone = wifi.clone();
     let ws2812_clone = ws2812.clone();
     let nvs_clone = nvs.clone();
-
-    std::thread::spawn(move || {
-        // Run the async wifi thread in a blocking executor
-        esp_idf_svc::hal::task::block_on(wifi::wifi_thread(
-            wifi_clone,
-            nvs_clone,
-            ws2812_clone,
-            wifi_status_clone,
-        ));
-    });
-
-    log::info!("WiFi thread started");
 
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
     led_light.lock().unwrap().set_duty_cycle_fully_on().unwrap();
@@ -233,8 +184,6 @@ fn main() -> Result<(), ()> {
     log::info!("Baseline readings completed with white balance calibration");
 
     let arced_nvs = Arc::new(nvs.clone());
-
-    let mut server = unsafe { Box::new_uninit().assume_init() };
 
     let _eventfd = esp_idf_svc::io::vfs::MountedEventfs::mount(3);
 
@@ -289,18 +238,18 @@ fn main() -> Result<(), ()> {
         }),
         None => None,
     };
-    let server_data = ServerRunData {
-        veml_rgb: veml_res.veml3328.clone(),
-        rgb_baseline: rgb_white_balance, // Use white balance instead of rgb_baseline TODO
-        dark_rgb_baseline,               // TODO
-        wifi_status: wifi_status.clone(),
-        nvs: arced_nvs.clone(),
+    let run_data = RunData {
         lux_buffer: lux_buffer.clone(),
-        rgb_buffers: rgb_buffers.clone(),
-        saved_rgb_multipliers: *saved_rgb_multipliers.lock().unwrap(),
-        ext_channel: measurement_channel.clone(),
+        nvs: arced_nvs.clone(),
+        rgb: ws_rgb_data.clone(),
+        saved_rgb_multipliers: saved_rgb_multipliers.clone(),
     };
-    let server_future = run(server_data, &stack, &mut server);
+    let bt_future = init_bt(
+        peripherals.modem,
+        nvs_clone,
+        run_data,
+        measurement_channel.clone(),
+    );
 
     // --- Serial connection setup ---
     let mut serial_driver = UsbSerialDriver::new(
@@ -330,7 +279,6 @@ fn main() -> Result<(), ()> {
         veml_res.veml7700.clone(),
         dark_baseline_reading,
         baseline_reading,
-        wifi_status,
         led_light,
         ws2812,
         saved_algorithm,
@@ -343,7 +291,7 @@ fn main() -> Result<(), ()> {
 
     // --- Run both server and serial connection ---
     esp_idf_svc::hal::task::block_on(async {
-        let _ = futures::future::join3(server_future, serial_future, measurement_future).await;
+        let _ = futures::future::join3(bt_future, serial_future, measurement_future).await;
     });
 
     Ok(())
@@ -353,7 +301,6 @@ pub struct ServerRunData {
     veml_rgb: Option<Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>>,
     rgb_baseline: Option<(u16, u16, u16)>,
     dark_rgb_baseline: Option<(u16, u16, u16)>,
-    wifi_status: Arc<Mutex<WifiEnum>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     saved_rgb_multipliers: RGBMultipliers,
     lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
@@ -397,7 +344,6 @@ pub async fn run(
     };
 
     let handler = WsHandler {
-        wifi_status: data.wifi_status,
         nvs: data.nvs,
         // Use smaller buffers to reduce memory usage
         lux_buffer: data.lux_buffer,
@@ -430,7 +376,6 @@ impl<C> From<C> for WsHandlerError<C> {
 type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 headers
 
 struct WsHandler {
-    wifi_status: Arc<Mutex<WifiEnum>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
     // Add median buffers
     lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
