@@ -1,3 +1,4 @@
+pub mod auto_calibrate;
 pub mod baseline_readings;
 pub mod bitbang_i2c;
 pub mod bluetooth;

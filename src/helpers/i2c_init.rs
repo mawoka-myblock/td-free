@@ -96,7 +96,8 @@ async fn get_rgb_veml(
         return None;
     }
     std::thread::sleep(std::time::Duration::from_millis(20));
-    if let Ok(_) = veml_rgb_temp.read_device_id().await {
+    // if let Ok(_) = veml_rgb_temp.read_device_id().await {
+    if (veml_rgb_temp.read_device_id().await).is_ok() {
         info!("id Check");
     /*        if veml_id != 0x28 {
         info!("Wrong ID, received 0x{veml_id:04X}");

@@ -76,7 +76,7 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsDat
     }
 }
 
-pub fn save_algorithm_variables(
+pub fn _save_algorithm_variables(
     b: &str,
     m: &str,
     threshold: &str,
@@ -237,7 +237,7 @@ pub fn clear_rgb_multipliers_nvs(nvs: EspNvsPartition<NvsDefault>) -> anyhow::Re
     }
 }
 
-pub fn save_spoolman_data(
+pub fn _save_spoolman_data(
     url: &str,
     field_name: &str,
     nvs: EspNvsPartition<NvsDefault>,
@@ -254,7 +254,7 @@ pub fn save_spoolman_data(
     Ok(())
 }
 
-pub fn read_spoolman_data(nvs: EspNvsPartition<NvsDefault>) -> (Option<String>, Option<String>) {
+pub fn _read_spoolman_data(nvs: EspNvsPartition<NvsDefault>) -> (Option<String>, Option<String>) {
     let nvs = match EspNvs::new(nvs, "prefs", true) {
         Ok(nvs) => nvs,
         Err(_) => {

@@ -8,8 +8,6 @@ use crate::helpers::bluetooth::server::RunData;
 use crate::helpers::i2c_init::Pins;
 use crate::helpers::i2c_init::initialize_veml;
 use crate::helpers::median_buffer;
-use crate::helpers::median_buffer::RunningMedianBuffer;
-use crate::helpers::median_buffer::RunningMedianBufferU16;
 use crate::helpers::nvs::NvsData;
 use crate::helpers::nvs::RGBMultipliers;
 use crate::helpers::nvs::clear_rgb_multipliers_nvs;
@@ -17,15 +15,10 @@ use crate::helpers::nvs::get_saved_algorithm_variables;
 use crate::helpers::nvs::get_saved_rgb_multipliers;
 use crate::helpers::readings::data_loop;
 use crate::helpers::serial::serial_connection;
-use core::fmt::Debug;
-use core::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use core::net::Ipv4Addr;
 
 use std::str;
 use std::sync::{Arc, Mutex};
-
-use edge_http::io::Error as EdgeError;
-use edge_http::io::server::Server;
-use edge_nal::TcpBind;
 
 use embassy_sync::blocking_mutex::raw::NoopRawMutex;
 use embassy_sync::channel::Channel;
@@ -35,12 +28,8 @@ use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
-use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvsPartition, NvsDefault};
-use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::{
-    eventloop::EspSystemEventLoop,
-    hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
-};
+use esp_idf_svc::hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*};
+use esp_idf_svc::nvs::EspDefaultNvsPartition;
 
 use helpers::bitbang_i2c::SimpleBitBangI2cInstance;
 use log::info;
@@ -157,12 +146,12 @@ fn main() -> Result<(), ()> {
         esp_idf_svc::hal::task::block_on(take_baseline_reading(veml_res.veml7700.clone()));
 
     // White balance calibration at 50% LED brightness
-    let rgb_white_balance: Option<(u16, u16, u16)> = match veml_res.veml3328.clone() {
-        Some(d) => Some(esp_idf_svc::hal::task::block_on(
-            take_rgb_white_balance_calibration(d.clone(), led_light.clone()),
-        )),
-        None => None,
-    };
+    let rgb_white_balance: Option<(u16, u16, u16)> = veml_res.veml3328.clone().map(|d| {
+        esp_idf_svc::hal::task::block_on(take_rgb_white_balance_calibration(
+            d.clone(),
+            led_light.clone(),
+        ))
+    });
 
     led_light.lock().unwrap().set_duty(25).unwrap();
     FreeRtos.delay_ms(500);
@@ -219,15 +208,12 @@ fn main() -> Result<(), ()> {
         median_buffer::RunningMedianBufferU16::new(100),
         median_buffer::RunningMedianBufferU16::new(100),
     )));
-    let ws_rgb_data = match veml_res.veml3328.clone() {
-        Some(some_veml_rgb) => Some(RgbWsHandler {
-            dark_rgb_baseline: dark_rgb_baseline.unwrap(),
-            rgb_baseline: rgb_white_balance.unwrap(),
-            rgb_buffers: rgb_buffers.clone(),
-            veml_rgb: some_veml_rgb,
-        }),
-        None => None,
-    };
+    let ws_rgb_data = veml_res.veml3328.clone().map(|some_veml_rgb| RgbWsHandler {
+        dark_rgb_baseline: dark_rgb_baseline.unwrap(),
+        rgb_baseline: rgb_white_balance.unwrap(),
+        rgb_buffers: rgb_buffers.clone(),
+        veml_rgb: some_veml_rgb,
+    });
     let run_data = RunData {
         lux_buffer: lux_buffer.clone(),
         nvs: arced_nvs.clone(),

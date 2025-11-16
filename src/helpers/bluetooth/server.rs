@@ -2,13 +2,12 @@ use enumset::enum_set;
 use esp_idf_svc::nvs::{EspNvsPartition, NvsDefault};
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Mutex};
 
 use crate::RgbWsHandler;
 use crate::helpers::bluetooth::{
-    APP_ID, CALIB_CHARACTERISTIC_UUID, COMMAND_NOTIFY, COMMAND_SERVICE_UUID, COMMAND_WRITE,
-    ExEspBleGap, ExEspGatts, IND_CHARACTERISTIC_UUID, MAX_CONNECTIONS, RECV_CHARACTERISTIC_UUID,
-    SERVICE_UUID,
+    APP_ID, CALIB_CHARACTERISTIC_UUID, COMMAND_WRITE, ExEspBleGap, ExEspGatts,
+    IND_CHARACTERISTIC_UUID, MAX_CONNECTIONS, SERVICE_UUID,
 };
 use crate::helpers::median_buffer;
 use crate::helpers::nvs::RGBMultipliers;
@@ -24,11 +23,11 @@ use esp_idf_svc::bt::{BdAddr, BtStatus, BtUuid};
 use log::{info, warn};
 
 #[derive(Debug, Clone)]
-struct Connection {
-    peer: BdAddr,
-    conn_id: Handle,
-    subscribed: bool,
-    mtu: Option<u16>,
+pub struct Connection {
+    pub peer: BdAddr,
+    pub conn_id: Handle,
+    pub subscribed: bool,
+    pub mtu: Option<u16>,
 }
 
 #[derive(Default)]
@@ -40,10 +39,8 @@ pub struct State {
     pub ind_cccd_handle: Option<Handle>,
     pub calib_handle: Option<Handle>,
     pub command_handle: Option<Handle>,
-    pub command_notify_handle: Option<Handle>,
     pub connections: heapless::Vec<Connection, MAX_CONNECTIONS>,
     pub response: GattResponse,
-    pub ind_confirmed: Option<BdAddr>,
 }
 
 type WriteBufferMap = HashMap<([u8; 6], Handle), Vec<u8>>;
@@ -55,7 +52,6 @@ pub struct BtServer {
     pub state: Arc<Mutex<State>>,
     pub run_data: RunData,
     pub is_subscribed: Arc<Mutex<bool>>,
-    condvar: Arc<Condvar>,
     pub write_buffers: RefCell<WriteBufferMap>,
 }
 
@@ -74,7 +70,6 @@ impl BtServer {
             gap,
             gatts,
             state: Arc::new(Mutex::new(Default::default())),
-            condvar: Arc::new(Condvar::new()),
             run_data: data,
             is_subscribed: Arc::new(Mutex::new(false)),
             write_buffers: RefCell::new(HashMap::new()),
@@ -136,22 +131,6 @@ impl BtServer {
 
         if let Some(gatt_if) = state.gatt_if {
             if let Some(notify_handle) = state.ind_handle {
-                for conn in state.connections.iter() {
-                    if conn.subscribed {
-                        self.gatts
-                            .notify(gatt_if, conn.conn_id, notify_handle, data)?;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn notify_command(&self, data: &[u8]) -> Result<(), EspError> {
-        let state = self.state.lock().unwrap();
-
-        if let Some(gatt_if) = state.gatt_if {
-            if let Some(notify_handle) = state.command_notify_handle {
                 for conn in state.connections.iter() {
                     if conn.subscribed {
                         self.gatts
@@ -254,8 +233,8 @@ impl BtServer {
             GattsEvent::ExecWrite {
                 conn_id,
                 trans_id,
-                addr,
-                canceled,
+                addr: _,
+                canceled: _,
             } => {
                 self.gatts
                     .send_response(gatt_if, conn_id, trans_id, GattStatus::Ok, None)?;
@@ -263,10 +242,10 @@ impl BtServer {
             GattsEvent::Read {
                 conn_id,
                 trans_id,
-                addr,
+                addr: _,
                 handle,
                 offset,
-                is_long,
+                is_long: _,
                 need_rsp,
             } => {
                 let should_read = {
@@ -305,26 +284,6 @@ impl BtServer {
                 id: GattId {
                     uuid: BtUuid::uuid128(SERVICE_UUID),
                     inst_id: 0,
-                },
-                is_primary: true,
-            },
-            12,
-        )?;
-        self.gap.set_adv_conf(&AdvConfiguration {
-            include_name: true,
-            include_txpower: true,
-            flag: 2,
-            service_uuid: Some(BtUuid::uuid128(COMMAND_SERVICE_UUID)),
-            // service_data: todo!(),
-            // manufacturer_data: todo!(),
-            ..Default::default()
-        })?;
-        self.gatts.create_service(
-            gatt_if,
-            &GattServiceId {
-                id: GattId {
-                    uuid: BtUuid::uuid128(COMMAND_SERVICE_UUID),
-                    inst_id: 1,
                 },
                 is_primary: true,
             },
@@ -411,18 +370,6 @@ impl BtServer {
             &[],
         )?;
 
-        self.gatts.add_characteristic(
-            service_handle,
-            &GattCharacteristic {
-                uuid: BtUuid::uuid128(COMMAND_NOTIFY),
-                permissions: enum_set!(Permission::Write | Permission::Read),
-                properties: enum_set!(Property::Notify),
-                max_len: 512,
-                auto_rsp: AutoResponse::ByApp,
-            },
-            &[],
-        )?;
-
         Ok(())
     }
 
@@ -435,33 +382,29 @@ impl BtServer {
         attr_handle: Handle,
         char_uuid: BtUuid,
     ) -> Result<(), EspError> {
-        let is_ind_uuid = char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID);
-        let is_command_uuid = char_uuid == BtUuid::uuid128(COMMAND_NOTIFY);
-        if is_ind_uuid || is_command_uuid {
+        let indicate_char = {
             let mut state = self.state.lock().unwrap();
-            if is_ind_uuid {
+
+            if state.service_handle != Some(service_handle) {
+                false
+            } else if char_uuid == BtUuid::uuid128(CALIB_CHARACTERISTIC_UUID) {
+                state.calib_handle = Some(attr_handle);
+                false
+            } else if char_uuid == BtUuid::uuid128(COMMAND_WRITE) {
+                state.command_handle = Some(attr_handle);
+                false
+            } else if char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID) {
                 state.ind_handle = Some(attr_handle);
+                true
+            } else {
+                false
             }
-            if is_command_uuid {
-                state.command_notify_handle = Some(attr_handle);
-            }
-        }
-        if is_ind_uuid {
-            warn!("Setting ind");
+        };
+        if indicate_char {
             self.gatts.add_descriptor(
                 service_handle,
                 &GattDescriptor {
-                    uuid: BtUuid::uuid16(0x2902),
-                    permissions: enum_set!(Permission::Read | Permission::Write),
-                },
-            )?;
-        }
-        if is_command_uuid {
-            warn!("Setting command");
-            self.gatts.add_descriptor(
-                service_handle,
-                &GattDescriptor {
-                    uuid: BtUuid::uuid16(0x2902),
+                    uuid: BtUuid::uuid16(0x2902), // CCCD
                     permissions: enum_set!(Permission::Read | Permission::Write),
                 },
             )?;
@@ -545,6 +488,8 @@ impl BtServer {
         {
             state.connections.swap_remove(index);
         }
+        let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+        *unlocked_is_subscribed = false;
         self.gap.start_advertising()?;
         Ok(())
     }
@@ -600,9 +545,7 @@ impl BtServer {
                 self.on_calib(addr, value, offset, state.calib_handle.unwrap())
             }
         } else if Some(handle) == state.command_handle {
-            if need_rsp || !is_prep {
-                self.on_command(addr, value, offset, state.command_handle.unwrap())
-            }
+            self.on_command(addr, value, offset, state.command_handle.unwrap())
         } else {
             return Ok(false);
         }
@@ -689,9 +632,7 @@ pub fn process_write(
     end_char: u8,
 ) -> Option<Vec<u8>> {
     let mut buffers = write_buffers.borrow_mut();
-    let buf = buffers
-        .entry((addr.addr(), handle))
-        .or_insert_with(Vec::new);
+    let buf = buffers.entry((addr.addr(), handle)).or_default();
 
     // Ensure buffer is large enough for this chunk
     if buf.len() < offset as usize + data.len() {

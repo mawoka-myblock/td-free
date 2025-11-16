@@ -82,12 +82,8 @@ pub const APP_ID: u16 = 0;
 
 // Our service UUID
 pub const SERVICE_UUID: u128 = 0xad91b201734740479e173bed82d75f9d;
-pub const COMMAND_SERVICE_UUID: u128 = 0xfa01aa70d90c4bcbae016f531cbb0759;
 
-/// Our "recv" characteristic - i.e. where clients can send data.
-pub const RECV_CHARACTERISTIC_UUID: u128 = 0xb6fccb5087be44f3ae22f85485ea42c4;
-/// Our "indicate" characteristic - i.e. where clients can receive data if they subscribe to it
+// Our "indicate" characteristic - i.e. where clients can receive data if they subscribe to it
 pub const IND_CHARACTERISTIC_UUID: u128 = 0x503de214868246c4828fd59144da41bf;
 pub const CALIB_CHARACTERISTIC_UUID: u128 = 0x11223344556677889900d123b56dd1ff;
 pub const COMMAND_WRITE: u128 = 0x7901fbd6e7fe421d9a75b91004c94654;
-pub const COMMAND_NOTIFY: u128 = 0x4b4bde58998e45b592ba1df305634a37;

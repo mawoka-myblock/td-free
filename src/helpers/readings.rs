@@ -25,7 +25,6 @@ use super::{
 pub static BUSY: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 pub static LAST_DATA: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 #[allow(clippy::too_many_arguments)]
-
 pub async fn data_loop(
     veml: Arc<Mutex<Veml7700<HardwareI2cInstance>>>,
     dark_baseline_reading: f32,
@@ -175,14 +174,11 @@ pub async fn read_data_with_buffer(
             let mut buffer = lux_buffer.lock().unwrap();
             buffer.clear();
         }
-        match rgb_data {
-            Some(d) => {
-                let mut buffers = d.rgb_buffers.lock().unwrap();
-                buffers.0.clear();
-                buffers.1.clear();
-                buffers.2.clear();
-            }
-            None => (),
+        if let Some(d) = rgb_data {
+            let mut buffers = d.rgb_buffers.lock().unwrap();
+            buffers.0.clear();
+            buffers.1.clear();
+            buffers.2.clear();
         }
 
         return Some("no_filament".to_string());
