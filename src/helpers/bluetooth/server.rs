@@ -1,13 +1,14 @@
-use embassy_sync::blocking_mutex::raw::NoopRawMutex;
-use embassy_sync::channel::Channel;
 use enumset::enum_set;
 use esp_idf_svc::nvs::{EspNvsPartition, NvsDefault};
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::RgbWsHandler;
 use crate::helpers::bluetooth::{
-    APP_ID, CALIB_CHARACTERISTIC_UUID, ExEspBleGap, ExEspGatts, IND_CHARACTERISTIC_UUID,
-    MAX_CONNECTIONS, RECV_CHARACTERISTIC_UUID, SERVICE_UUID,
+    APP_ID, CALIB_CHARACTERISTIC_UUID, COMMAND_NOTIFY, COMMAND_SERVICE_UUID, COMMAND_WRITE,
+    ExEspBleGap, ExEspGatts, IND_CHARACTERISTIC_UUID, MAX_CONNECTIONS, RECV_CHARACTERISTIC_UUID,
+    SERVICE_UUID,
 };
 use crate::helpers::median_buffer;
 use crate::helpers::nvs::RGBMultipliers;
@@ -21,23 +22,6 @@ use esp_idf_svc::bt::ble::gatt::{
 };
 use esp_idf_svc::bt::{BdAddr, BtStatus, BtUuid};
 use log::{info, warn};
-
-#[derive(Clone)]
-pub struct CharacteristicDef {
-    pub uuid: BtUuid,
-    pub permissions: enumset::EnumSet<Permission>,
-    pub properties: enumset::EnumSet<Property>,
-    pub max_len: u16,
-    pub auto_rsp: AutoResponse,
-    pub requires_cccd: bool,
-}
-
-#[derive(Clone)]
-pub struct ServiceDef {
-    pub uuid: BtUuid,
-    pub primary: bool,
-    pub characteristics: Vec<CharacteristicDef>,
-}
 
 #[derive(Debug, Clone)]
 struct Connection {
@@ -55,10 +39,14 @@ pub struct State {
     pub ind_handle: Option<Handle>,
     pub ind_cccd_handle: Option<Handle>,
     pub calib_handle: Option<Handle>,
+    pub command_handle: Option<Handle>,
+    pub command_notify_handle: Option<Handle>,
     pub connections: heapless::Vec<Connection, MAX_CONNECTIONS>,
     pub response: GattResponse,
     pub ind_confirmed: Option<BdAddr>,
 }
+
+type WriteBufferMap = HashMap<([u8; 6], Handle), Vec<u8>>;
 
 #[derive(Clone)]
 pub struct BtServer {
@@ -66,7 +54,9 @@ pub struct BtServer {
     pub gatts: ExEspGatts,
     pub state: Arc<Mutex<State>>,
     pub run_data: RunData,
+    pub is_subscribed: Arc<Mutex<bool>>,
     condvar: Arc<Condvar>,
+    pub write_buffers: RefCell<WriteBufferMap>,
 }
 
 #[derive(Clone)]
@@ -86,24 +76,19 @@ impl BtServer {
             state: Arc::new(Mutex::new(Default::default())),
             condvar: Arc::new(Condvar::new()),
             run_data: data,
+            is_subscribed: Arc::new(Mutex::new(false)),
+            write_buffers: RefCell::new(HashMap::new()),
         }
     }
-    fn on_subscribed(&self, addr: BdAddr) {
-        // Put your custom code here or leave empty
-        // `indicate()` will anyway send to all connected clients
-        warn!("Client {addr} subscribed - put your custom logic here");
+    fn on_subscribed(&self, _: BdAddr) {
+        let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+        *unlocked_is_subscribed = true;
     }
-    fn on_unsubscribed(&self, addr: BdAddr) {
-        // Put your custom code here
-        // `indicate()` will anyway send to all connected clients
-        warn!("Client {addr} unsubscribed - put your custom logic here");
+    fn on_unsubscribed(&self, _: BdAddr) {
+        let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+        *unlocked_is_subscribed = false;
     }
-    fn on_recv(&self, addr: BdAddr, data: &[u8], offset: u16, mtu: Option<u16>) {
-        // Put your custom code here
-        warn!(
-            "Received data from {addr}: {data:?}, offset: {offset}, mtu: {mtu:?} - put your custom logic here"
-        );
-    }
+    fn on_recv(&self, _: BdAddr, _: &[u8], _: u16, _: Option<u16>) {}
 
     pub fn on_gap_event(&self, event: BleGapEvent) -> Result<(), EspError> {
         info!("Got event: {event:?}");
@@ -115,53 +100,66 @@ impl BtServer {
 
         Ok(())
     }
+    /*
+       pub fn indicate(&self, data: &[u8]) -> Result<(), EspError> {
+           for peer_index in 0..MAX_CONNECTIONS {
+               let mut state = self.state.lock().unwrap();
 
-    pub fn indicate(&self, data: &[u8]) -> Result<(), EspError> {
-        for peer_index in 0..MAX_CONNECTIONS {
-            let mut state = self.state.lock().unwrap();
-            loop {
-                if state.connections.len() <= peer_index {
-                    break;
-                }
+               loop {
+                   if state.connections.len() <= peer_index {
+                       break;
+                   }
 
-                let Some(gatt_if) = state.gatt_if else {
-                    break;
-                };
-                let Some(ind_handle) = state.ind_handle else {
-                    break;
-                };
+                   let Some(gatt_if) = state.gatt_if else {
+                       break;
+                   };
+                   let Some(ind_handle) = state.ind_handle else {
+                       break;
+                   };
 
-                if state.ind_confirmed.is_none() {
-                    let conn = &state.connections[peer_index];
-                    self.gatts
-                        .indicate(gatt_if, conn.conn_id, ind_handle, data)?;
-                    state.ind_confirmed = Some(conn.peer);
-                    break;
-                } else {
-                    state = self.condvar.wait(state).unwrap();
+                   if state.ind_confirmed.is_none() {
+                       let conn = &state.connections[peer_index];
+                       self.gatts
+                           .indicate(gatt_if, conn.conn_id, ind_handle, data)?;
+                       state.ind_confirmed = Some(conn.peer);
+                       break;
+                   } else {
+                       state = self.condvar.wait(state).unwrap();
+                   }
+               }
+           }
+           Ok(())
+       }
+    */
+    pub fn notify_ind(&self, data: &[u8]) -> Result<(), EspError> {
+        let state = self.state.lock().unwrap();
+
+        if let Some(gatt_if) = state.gatt_if {
+            if let Some(notify_handle) = state.ind_handle {
+                for conn in state.connections.iter() {
+                    if conn.subscribed {
+                        self.gatts
+                            .notify(gatt_if, conn.conn_id, notify_handle, data)?;
+                    }
                 }
             }
         }
         Ok(())
     }
 
-    pub fn notify(&self, data: &[u8]) -> Result<(), EspError> {
+    pub fn notify_command(&self, data: &[u8]) -> Result<(), EspError> {
         let state = self.state.lock().unwrap();
 
         if let Some(gatt_if) = state.gatt_if {
-            if let Some(notify_handle) = state.ind_handle {
+            if let Some(notify_handle) = state.command_notify_handle {
                 for conn in state.connections.iter() {
-                    warn!("Conn found, {conn:?}");
-                    // Only send if the client is subscribed
                     if conn.subscribed {
                         self.gatts
                             .notify(gatt_if, conn.conn_id, notify_handle, data)?;
-                        log::info!("Notified {} with data {:?}", conn.peer, data);
                     }
                 }
             }
         }
-
         Ok(())
     }
 
@@ -253,6 +251,15 @@ impl BtServer {
                 self.check_gatt_status(status)?;
                 // self.confirm_indication()?;
             }
+            GattsEvent::ExecWrite {
+                conn_id,
+                trans_id,
+                addr,
+                canceled,
+            } => {
+                self.gatts
+                    .send_response(gatt_if, conn_id, trans_id, GattStatus::Ok, None)?;
+            }
             GattsEvent::Read {
                 conn_id,
                 trans_id,
@@ -262,15 +269,13 @@ impl BtServer {
                 is_long,
                 need_rsp,
             } => {
-                info!("Trying read");
                 let should_read = {
                     let state = self.state.lock().unwrap();
                     Some(handle) == state.calib_handle && need_rsp
                 };
-                info!("State acquired");
 
                 if should_read {
-                    self.read_calib(gatt_if, conn_id, trans_id, handle)?;
+                    self.read_calib(gatt_if, conn_id, trans_id, offset, handle)?;
                 }
             }
             _ => (),
@@ -303,7 +308,27 @@ impl BtServer {
                 },
                 is_primary: true,
             },
-            8,
+            12,
+        )?;
+        self.gap.set_adv_conf(&AdvConfiguration {
+            include_name: true,
+            include_txpower: true,
+            flag: 2,
+            service_uuid: Some(BtUuid::uuid128(COMMAND_SERVICE_UUID)),
+            // service_data: todo!(),
+            // manufacturer_data: todo!(),
+            ..Default::default()
+        })?;
+        self.gatts.create_service(
+            gatt_if,
+            &GattServiceId {
+                id: GattId {
+                    uuid: BtUuid::uuid128(COMMAND_SERVICE_UUID),
+                    inst_id: 1,
+                },
+                is_primary: true,
+            },
+            12,
         )?;
 
         Ok(())
@@ -353,10 +378,10 @@ impl BtServer {
         self.gatts.add_characteristic(
             service_handle,
             &GattCharacteristic {
-                uuid: BtUuid::uuid128(RECV_CHARACTERISTIC_UUID),
-                permissions: enum_set!(Permission::Write),
-                properties: enum_set!(Property::Write),
-                max_len: 200, // Max recv data
+                uuid: BtUuid::uuid128(CALIB_CHARACTERISTIC_UUID),
+                permissions: enum_set!(Permission::Read | Permission::Write),
+                properties: enum_set!(Property::Read | Property::Write),
+                max_len: 512,
                 auto_rsp: AutoResponse::ByApp,
             },
             &[],
@@ -365,10 +390,10 @@ impl BtServer {
         self.gatts.add_characteristic(
             service_handle,
             &GattCharacteristic {
-                uuid: BtUuid::uuid128(CALIB_CHARACTERISTIC_UUID),
-                permissions: enum_set!(Permission::Read | Permission::Write),
-                properties: enum_set!(Property::Read | Property::Write),
-                max_len: 200,
+                uuid: BtUuid::uuid128(COMMAND_WRITE),
+                permissions: enum_set!(Permission::Write),
+                properties: enum_set!(Property::Write),
+                max_len: 512,
                 auto_rsp: AutoResponse::ByApp,
             },
             &[],
@@ -386,6 +411,18 @@ impl BtServer {
             &[],
         )?;
 
+        self.gatts.add_characteristic(
+            service_handle,
+            &GattCharacteristic {
+                uuid: BtUuid::uuid128(COMMAND_NOTIFY),
+                permissions: enum_set!(Permission::Write | Permission::Read),
+                properties: enum_set!(Property::Notify),
+                max_len: 512,
+                auto_rsp: AutoResponse::ByApp,
+            },
+            &[],
+        )?;
+
         Ok(())
     }
 
@@ -398,30 +435,29 @@ impl BtServer {
         attr_handle: Handle,
         char_uuid: BtUuid,
     ) -> Result<(), EspError> {
-        let indicate_char = {
+        let is_ind_uuid = char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID);
+        let is_command_uuid = char_uuid == BtUuid::uuid128(COMMAND_NOTIFY);
+        if is_ind_uuid || is_command_uuid {
             let mut state = self.state.lock().unwrap();
-
-            if state.service_handle != Some(service_handle) {
-                false
-            } else if char_uuid == BtUuid::uuid128(RECV_CHARACTERISTIC_UUID) {
-                state.recv_handle = Some(attr_handle);
-                false
-            } else if char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID) {
+            if is_ind_uuid {
                 state.ind_handle = Some(attr_handle);
-                true
-            } else if char_uuid == BtUuid::uuid128(CALIB_CHARACTERISTIC_UUID) {
-                state.calib_handle = Some(attr_handle);
-                false
-            } else {
-                false
             }
-        };
-        info!("Char: {indicate_char}");
-
-        if char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID) {
-            let mut state = self.state.lock().unwrap();
-            state.ind_handle = Some(attr_handle);
-
+            if is_command_uuid {
+                state.command_notify_handle = Some(attr_handle);
+            }
+        }
+        if is_ind_uuid {
+            warn!("Setting ind");
+            self.gatts.add_descriptor(
+                service_handle,
+                &GattDescriptor {
+                    uuid: BtUuid::uuid16(0x2902),
+                    permissions: enum_set!(Permission::Read | Permission::Write),
+                },
+            )?;
+        }
+        if is_command_uuid {
+            warn!("Setting command");
             self.gatts.add_descriptor(
                 service_handle,
                 &GattDescriptor {
@@ -499,9 +535,6 @@ impl BtServer {
 
         Ok(())
     }
-
-    /// Delete a connection
-    /// Called from within the event callback once we are notified for a disconnected peer
     fn delete_conn(&self, addr: BdAddr) -> Result<(), EspError> {
         let mut state = self.state.lock().unwrap();
 
@@ -512,7 +545,7 @@ impl BtServer {
         {
             state.connections.swap_remove(index);
         }
-
+        self.gap.start_advertising()?;
         Ok(())
     }
 
@@ -563,9 +596,12 @@ impl BtServer {
 
             self.on_recv(addr, value, offset, conn.mtu);
         } else if Some(handle) == state.calib_handle {
-            info!("{handle:?}, {need_rsp}, {is_prep}");
             if need_rsp || !is_prep {
-                self.on_calib(addr, value)
+                self.on_calib(addr, value, offset, state.calib_handle.unwrap())
+            }
+        } else if Some(handle) == state.command_handle {
+            if need_rsp || !is_prep {
+                self.on_command(addr, value, offset, state.command_handle.unwrap())
             }
         } else {
             return Ok(false);
@@ -617,7 +653,6 @@ impl BtServer {
             self.gatts
                 .send_response(gatt_if, conn_id, trans_id, GattStatus::Ok, None)?;
         }
-
         Ok(())
     }
 
@@ -644,4 +679,33 @@ impl BtServer {
             Ok(())
         }
     }
+}
+pub fn process_write(
+    write_buffers: &RefCell<WriteBufferMap>,
+    addr: BdAddr,
+    handle: Handle,
+    data: &[u8],
+    offset: u16,
+    end_char: u8,
+) -> Option<Vec<u8>> {
+    let mut buffers = write_buffers.borrow_mut();
+    let buf = buffers
+        .entry((addr.addr(), handle))
+        .or_insert_with(Vec::new);
+
+    // Ensure buffer is large enough for this chunk
+    if buf.len() < offset as usize + data.len() {
+        buf.resize(offset as usize + data.len(), 0);
+    }
+
+    // Copy the chunk into the buffer
+    buf[offset as usize..offset as usize + data.len()].copy_from_slice(data);
+
+    if let Some(&last_byte) = buf.last() {
+        if last_byte == end_char {
+            // Full write received → take the buffer
+            return buffers.remove(&(addr.addr(), handle));
+        }
+    }
+    None
 }

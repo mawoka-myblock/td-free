@@ -35,14 +35,8 @@ use embedded_hal::pwm::SetDutyCycle;
 use esp_idf_svc::hal::ledc::config::TimerConfig;
 use esp_idf_svc::hal::ledc::{LedcDriver, LedcTimerDriver};
 use esp_idf_svc::hal::usb_serial::{UsbSerialConfig, UsbSerialDriver};
-use esp_idf_svc::ipv4::{
-    self, ClientConfiguration as IpClientConfiguration, Configuration as IpConfiguration,
-    DHCPClientSettings, Mask, RouterConfiguration, Subnet,
-};
-use esp_idf_svc::netif::{EspNetif, NetifConfiguration};
 use esp_idf_svc::nvs::{EspDefaultNvsPartition, EspNvsPartition, NvsDefault};
 use esp_idf_svc::timer::EspTaskTimerService;
-use esp_idf_svc::wifi::{AsyncWifi, EspWifi, WifiDriver};
 use esp_idf_svc::{
     eventloop::EspSystemEventLoop,
     hal::{delay::FreeRtos, peripherals::Peripherals, prelude::*},
@@ -56,7 +50,7 @@ use ws2812_esp32_rmt_driver::driver::color::LedPixelColorGrb24;
 
 mod helpers;
 mod led;
-mod routes;
+// mod routes;
 mod veml3328;
 
 static BUILD_TIMESTAMP: &str = env!("VERGEN_BUILD_TIMESTAMP");
@@ -152,11 +146,8 @@ fn main() -> Result<(), ()> {
         true => ws2812_old,
         false => ws2812_new,
     };
-    let sysloop = EspSystemEventLoop::take().unwrap();
 
     let nvs = EspDefaultNvsPartition::take().unwrap();
-    let timer_service = EspTaskTimerService::new().unwrap();
-    let ws2812_clone = ws2812.clone();
     let nvs_clone = nvs.clone();
 
     // let veml: Arc<Mutex<VEML3328<I2cDriver<'_>>>> = Arc::new(Mutex::new(VEML3328::new(i2c)));
@@ -222,7 +213,6 @@ fn main() -> Result<(), ()> {
     let measurement_channel = Arc::new(Channel::<NoopRawMutex, Option<String>, 1>::new());
 
     log::info!("Server created");
-    let stack = edge_nal_std::Stack::new();
     let lux_buffer = Arc::new(Mutex::new(median_buffer::RunningMedianBuffer::new(100)));
     let rgb_buffers = Arc::new(Mutex::new((
         median_buffer::RunningMedianBufferU16::new(100),
@@ -297,92 +287,6 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-pub struct ServerRunData {
-    veml_rgb: Option<Arc<Mutex<veml3328::VEML3328<SimpleBitBangI2cInstance>>>>,
-    rgb_baseline: Option<(u16, u16, u16)>,
-    dark_rgb_baseline: Option<(u16, u16, u16)>,
-    nvs: Arc<EspNvsPartition<NvsDefault>>,
-    saved_rgb_multipliers: RGBMultipliers,
-    lux_buffer: Arc<Mutex<RunningMedianBuffer>>,
-    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
-    rgb_buffers: Arc<
-        Mutex<(
-            RunningMedianBufferU16,
-            RunningMedianBufferU16,
-            RunningMedianBufferU16,
-        )>,
-    >,
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn run(
-    data: ServerRunData,
-    stack: &edge_nal_std::Stack,
-    server: &mut WsServer,
-) -> Result<(), anyhow::Error> {
-    let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 80));
-
-    log::info!("Running HTTP server on {addr}");
-    log::info!(
-        "Loaded RGB multipliers: R={:.2}, G={:.2}, B={:.2}, Brightness={:.2}, TD_ref={:.2}",
-        data.saved_rgb_multipliers.red,
-        data.saved_rgb_multipliers.green,
-        data.saved_rgb_multipliers.blue,
-        data.saved_rgb_multipliers.brightness,
-        data.saved_rgb_multipliers.td_reference
-    );
-
-    let acceptor = stack.bind(addr).await?;
-    let ws_rgb_data = match data.veml_rgb {
-        Some(some_veml_rgb) => Some(RgbWsHandler {
-            dark_rgb_baseline: data.dark_rgb_baseline.unwrap(),
-            rgb_baseline: data.rgb_baseline.unwrap(),
-            rgb_buffers: data.rgb_buffers,
-            veml_rgb: some_veml_rgb,
-        }),
-        None => None,
-    };
-
-    let handler = WsHandler {
-        nvs: data.nvs,
-        // Use smaller buffers to reduce memory usage
-        lux_buffer: data.lux_buffer,
-        rgb: ws_rgb_data,
-        saved_rgb_multipliers: Arc::new(Mutex::new(data.saved_rgb_multipliers)),
-        ext_channel: data.ext_channel,
-    };
-
-    match server.run(None, acceptor, handler).await {
-        Ok(_) => (),
-        Err(e) => log::error!("server.run: {e:?}"),
-    };
-
-    Ok(())
-}
-
-#[derive(Debug)]
-enum WsHandlerError<C> {
-    Connection(C),
-}
-
-impl<C> From<C> for WsHandlerError<C> {
-    fn from(e: C) -> Self {
-        Self::Connection(e)
-    }
-}
-
-// Reduce the size of the future by using max 2 handler instead of 4
-// and by limiting the number of headers to 32 instead of 64
-type WsServer = Server<2, 1024, 16>; // Reduced from DEFAULT_BUF_SIZE and 32 headers
-
-struct WsHandler {
-    nvs: Arc<EspNvsPartition<NvsDefault>>,
-    // Add median buffers
-    lux_buffer: Arc<Mutex<median_buffer::RunningMedianBuffer>>,
-    rgb: Option<RgbWsHandler>,
-    saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
-    ext_channel: Arc<Channel<NoopRawMutex, Option<String>, 1>>,
-}
 #[derive(Clone)]
 pub struct RgbWsHandler {
     pub rgb_baseline: (u16, u16, u16),

@@ -11,13 +11,20 @@ use esp_idf_svc::{
 use log::{error, info, warn};
 
 use crate::helpers::{
-    bluetooth::server::BtServer,
+    bluetooth::server::{BtServer, process_write},
     nvs::{RGBMultipliers, save_rgb_multipliers},
 };
 
 impl BtServer {
-    pub fn on_calib(&self, _: BdAddr, data: &[u8]) {
-        let str_data = String::from_utf8(data.to_vec()).unwrap();
+    pub fn on_calib(&self, addr: BdAddr, data: &[u8], offset: u16, handle: u16) {
+        warn!("On calib called");
+        let complete_data: Vec<u8> =
+            match process_write(&self.write_buffers, addr, handle, data, offset, b'}') {
+                Some(d) => d,
+                None => return,
+            };
+
+        let str_data = String::from_utf8(complete_data).unwrap();
         let mut red = 1.0f32;
         let mut green = 1.0f32;
         let mut blue = 1.0f32;
@@ -82,10 +89,14 @@ impl BtServer {
         gatt_if: GattInterface,
         conn_id: ConnectionId,
         trans_id: TransferId,
+        offset: u16,
         attr_handle: Handle,
     ) -> Result<(), EspError> {
         info!("Read RGB Multipliers");
-        let multipliers = self.run_data.saved_rgb_multipliers.lock().unwrap();
+        let multipliers = {
+            let d = self.run_data.saved_rgb_multipliers.lock().unwrap();
+            *d
+        };
         let json_response = format!(
             r#"{{"red": {:.2}, "green": {:.2}, "blue": {:.2}, "brightness": {:.2}, "td_reference": {:.2}, "reference_r": {}, "reference_g": {}, "reference_b": {}, "rgb_disabled": true}}"#,
             multipliers.red,
@@ -97,12 +108,13 @@ impl BtServer {
             multipliers.reference_g,
             multipliers.reference_b
         );
-        drop(multipliers);
+        let bytes_json = json_response.as_bytes();
+        let chunk = &bytes_json[offset as usize..];
         let mut state = self.state.lock().unwrap();
         state
             .response
             .attr_handle(attr_handle)
-            .value(json_response.as_bytes())
+            .value(chunk)
             .unwrap();
         self.gatts.send_response(
             gatt_if,
