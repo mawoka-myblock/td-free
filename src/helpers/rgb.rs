@@ -165,7 +165,7 @@ pub fn apply_rgb_multipliers(
 ) -> (u8, u8, u8) {
     // Avoid division by zero
     let safe_current_lux = current_lux.max(1.0);
-
+    log::info!("Td Reference: {}", multipliers.td_reference);
     // Calculate normalization factor to reach target lux
     let normalization_factor = (safe_current_lux / multipliers.td_reference).clamp(0.01, 10.0);
 

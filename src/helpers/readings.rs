@@ -180,7 +180,7 @@ pub async fn read_data_with_buffer(
             buffers.1.clear();
             buffers.2.clear();
         }
-
+        set_led(ws2812.clone(), 0, 255, 0);
         return Some("no_filament".to_string());
     }
 
@@ -322,7 +322,8 @@ pub async fn read_data_with_buffer(
         let rgb_buf = rgb_d.rgb_buffers.lock().unwrap();
         (lux_buf.len(), rgb_buf.0.len())
     };
-
+    let mut led = led_light.lock().unwrap();
+    led.set_duty_cycle_percent(25).unwrap();
     log::info!(
         "Reading: {:.2}, RGB: {} (medians from {} lux, {} RGB samples, confidence: {}), Raw RGB: ({},{},{}), Final RGB: ({},{},{}) - Baseline: {:.2}, Lux: {}, Clear: {}",
         adjusted_td_value,

@@ -4,6 +4,7 @@ use log::{info, warn};
 use crate::helpers::{
     auto_calibrate::auto_calibrate,
     bluetooth::server::{BtServer, process_write},
+    nvs::save_algorithm_variables,
 };
 
 impl BtServer {
@@ -30,11 +31,20 @@ impl BtServer {
                 );
                 d.into_bytes()
             }
-            _ => b"unknown_command".to_vec(),
+            other => {
+                if let Some(rest) = other.strip_prefix("set_algo:") {
+                    info!("Setting algo");
+                    let nvs = self.run_data.nvs.clone();
+                    save_algorithm_variables(rest, nvs.as_ref().clone()).unwrap();
+                    b"ok".to_vec()
+                } else {
+                    b"unknown_command".to_vec()
+                }
+            }
         };
         response.insert(0, b'S');
         self.notify_ind(&response).unwrap();
-        info!("Rersponse: {response:?}");
+        info!("Response: {response:?}");
         let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
         *unlocked_is_subscribed = true;
     }

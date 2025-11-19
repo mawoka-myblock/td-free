@@ -76,12 +76,11 @@ pub fn get_saved_algorithm_variables(nvs: EspNvsPartition<NvsDefault>) -> NvsDat
     }
 }
 
-pub fn _save_algorithm_variables(
-    b: &str,
-    m: &str,
-    threshold: &str,
+pub fn save_algorithm_variables(
+    data: &str,
     nvs: EspNvsPartition<NvsDefault>,
 ) -> anyhow::Result<()> {
+    let separated_string: Vec<&str> = data.split(",").collect();
     let mut nvs = match EspNvs::new(nvs, "algo", true) {
         Ok(nvs) => nvs,
         Err(_) => {
@@ -89,9 +88,9 @@ pub fn _save_algorithm_variables(
         }
     };
 
-    nvs.set_str("m", m)?;
-    nvs.set_str("b", b)?;
-    nvs.set_str("threshold", threshold)?;
+    nvs.set_str("m", separated_string[0])?;
+    nvs.set_str("b", separated_string[1])?;
+    nvs.set_str("threshold", separated_string[2])?;
     Ok(())
 }
 

@@ -16,6 +16,7 @@ use crate::helpers::bluetooth::server::RunData;
 pub mod calib;
 pub mod command;
 pub mod server;
+pub mod version;
 
 pub async fn init_bt(
     modem: Modem,
@@ -87,3 +88,4 @@ pub const SERVICE_UUID: u128 = 0xad91b201734740479e173bed82d75f9d;
 pub const IND_CHARACTERISTIC_UUID: u128 = 0x503de214868246c4828fd59144da41bf;
 pub const CALIB_CHARACTERISTIC_UUID: u128 = 0x11223344556677889900d123b56dd1ff;
 pub const COMMAND_WRITE: u128 = 0x7901fbd6e7fe421d9a75b91004c94654;
+pub const VERSION_UUID: u128 = 0x22b04805d0aa42f18db3de7f6d201df1;

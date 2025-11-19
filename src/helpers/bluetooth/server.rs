@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex};
 use crate::RgbWsHandler;
 use crate::helpers::bluetooth::{
     APP_ID, CALIB_CHARACTERISTIC_UUID, COMMAND_WRITE, ExEspBleGap, ExEspGatts,
-    IND_CHARACTERISTIC_UUID, MAX_CONNECTIONS, SERVICE_UUID,
+    IND_CHARACTERISTIC_UUID, MAX_CONNECTIONS, SERVICE_UUID, VERSION_UUID,
 };
 use crate::helpers::median_buffer;
 use crate::helpers::nvs::RGBMultipliers;
@@ -34,7 +34,7 @@ pub struct Connection {
 pub struct State {
     pub gatt_if: Option<GattInterface>,
     pub service_handle: Option<Handle>,
-    pub recv_handle: Option<Handle>,
+    pub version_handle: Option<Handle>,
     pub ind_handle: Option<Handle>,
     pub ind_cccd_handle: Option<Handle>,
     pub calib_handle: Option<Handle>,
@@ -83,7 +83,6 @@ impl BtServer {
         let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
         *unlocked_is_subscribed = false;
     }
-    fn on_recv(&self, _: BdAddr, _: &[u8], _: u16, _: Option<u16>) {}
 
     pub fn on_gap_event(&self, event: BleGapEvent) -> Result<(), EspError> {
         info!("Got event: {event:?}");
@@ -248,13 +247,20 @@ impl BtServer {
                 is_long: _,
                 need_rsp,
             } => {
-                let should_read = {
+                let should_read_calib = {
                     let state = self.state.lock().unwrap();
                     Some(handle) == state.calib_handle && need_rsp
                 };
+                let should_read_version = {
+                    let state = self.state.lock().unwrap();
+                    Some(handle) == state.version_handle && need_rsp
+                };
 
-                if should_read {
+                if should_read_calib {
                     self.read_calib(gatt_if, conn_id, trans_id, offset, handle)?;
+                }
+                if should_read_version {
+                    self.read_version(gatt_if, conn_id, trans_id, offset, handle)?;
                 }
             }
             _ => (),
@@ -299,7 +305,7 @@ impl BtServer {
         let mut state = self.state.lock().unwrap();
 
         if state.service_handle == Some(service_handle) {
-            state.recv_handle = None;
+            state.version_handle = None;
             state.ind_handle = None;
             state.ind_cccd_handle = None;
         }
@@ -357,6 +363,17 @@ impl BtServer {
             },
             &[],
         )?;
+        self.gatts.add_characteristic(
+            service_handle,
+            &GattCharacteristic {
+                uuid: BtUuid::uuid128(VERSION_UUID),
+                permissions: enum_set!(Permission::Read),
+                properties: enum_set!(Property::Read),
+                max_len: 512,
+                auto_rsp: AutoResponse::ByApp,
+            },
+            &[],
+        )?;
 
         self.gatts.add_characteristic(
             service_handle,
@@ -392,6 +409,9 @@ impl BtServer {
                 false
             } else if char_uuid == BtUuid::uuid128(COMMAND_WRITE) {
                 state.command_handle = Some(attr_handle);
+                false
+            } else if char_uuid == BtUuid::uuid128(VERSION_UUID) {
+                state.version_handle = Some(attr_handle);
                 false
             } else if char_uuid == BtUuid::uuid128(IND_CHARACTERISTIC_UUID) {
                 state.ind_handle = Some(attr_handle);
@@ -510,7 +530,6 @@ impl BtServer {
     ) -> Result<bool, EspError> {
         let mut state = self.state.lock().unwrap();
 
-        let recv_handle = state.recv_handle;
         let ind_cccd_handle = state.ind_cccd_handle;
 
         let Some(conn) = state
@@ -536,10 +555,6 @@ impl BtServer {
                     self.on_unsubscribed(conn.peer);
                 }
             }
-        } else if Some(handle) == recv_handle {
-            // Receive data on the recv characteristic
-
-            self.on_recv(addr, value, offset, conn.mtu);
         } else if Some(handle) == state.calib_handle {
             if need_rsp || !is_prep {
                 self.on_calib(addr, value, offset, state.calib_handle.unwrap())
