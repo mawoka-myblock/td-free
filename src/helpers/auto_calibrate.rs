@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use esp_idf_svc::nvs::{EspNvsPartition, NvsDefault};
-use log::info;
+use log::{info, warn};
 
 use crate::{
     RgbWsHandler,
@@ -13,6 +13,7 @@ use crate::{
 };
 
 pub fn auto_calibrate(
+    input_data: String,
     rgb: Option<RgbWsHandler>,
     saved_rgb_multipliers: Arc<Mutex<RGBMultipliers>>,
     nvs: Arc<EspNvsPartition<NvsDefault>>,
@@ -25,17 +26,15 @@ pub fn auto_calibrate(
     log::info!("Starting optimization-based color calibration...");
 
     // Read the request body to get reference color
-    let buffer = [0u8; 256];
     let total_read = 0;
 
     // Parse reference color from request body or use current saved values
     let (target_r, target_g, target_b) = if total_read > 0 {
-        let body_str = str::from_utf8(&buffer[..total_read]).unwrap_or("{}");
         let mut ref_r = 127u8;
         let mut ref_g = 127u8;
         let mut ref_b = 127u8;
 
-        for part in body_str.split(',') {
+        for part in input_data.split(',') {
             let part = part.trim().trim_matches('{').trim_matches('}');
             if let Some((key, value)) = part.split_once(':') {
                 let key = key.trim().trim_matches('"');
@@ -186,6 +185,7 @@ pub fn auto_calibrate(
     // Save to NVS
     match save_rgb_multipliers(new_multipliers, nvs.as_ref().clone()) {
         Ok(_) => {
+            warn!("Success, returning");
             format!(
                 r#"{{"status": "success", "red": {optimized_red:.2}, "green": {optimized_green:.2}, "blue": {optimized_blue:.2}, "brightness": {optimized_brightness:.2}, "td_reference": {current_lux:.2}}}"#,
             )

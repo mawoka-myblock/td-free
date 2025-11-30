@@ -560,7 +560,9 @@ impl BtServer {
                 self.on_calib(addr, value, offset, state.calib_handle.unwrap())
             }
         } else if Some(handle) == state.command_handle {
-            self.on_command(addr, value, offset, state.command_handle.unwrap())
+            let cmd_handle = state.command_handle.unwrap();
+            drop(state);
+            self.on_command(addr, value, offset, cmd_handle)
         } else {
             return Ok(false);
         }

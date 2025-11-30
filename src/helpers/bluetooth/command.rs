@@ -1,4 +1,4 @@
-use esp_idf_svc::bt::BdAddr;
+use esp_idf_svc::{bt::BdAddr, hal::delay::FreeRtos};
 use log::{info, warn};
 
 use crate::helpers::{
@@ -9,8 +9,11 @@ use crate::helpers::{
 
 impl BtServer {
     pub fn on_command(&self, addr: BdAddr, data: &[u8], offset: u16, handle: u16) {
-        let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
-        *unlocked_is_subscribed = false;
+        {
+            let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+            *unlocked_is_subscribed = false;
+        }
+        FreeRtos::delay_ms(300);
         warn!("On command: {data:?}");
         let complete_data: Vec<u8> =
             match process_write(&self.write_buffers, addr, handle, data, offset, b'\n') {
@@ -20,32 +23,35 @@ impl BtServer {
         info!("Full data received");
         let str_data = String::from_utf8(complete_data).unwrap();
         let data = str_data.replace("\n", "");
-        let mut response = match &*data {
-            "auto_calibrate" => {
-                info!("Now running auto calibrate");
-                let d = auto_calibrate(
-                    self.run_data.rgb.clone(),
-                    self.run_data.saved_rgb_multipliers.clone(),
-                    self.run_data.nvs.clone(),
-                    self.run_data.lux_buffer.clone(),
-                );
-                d.into_bytes()
-            }
-            other => {
-                if let Some(rest) = other.strip_prefix("set_algo:") {
-                    info!("Setting algo");
-                    let nvs = self.run_data.nvs.clone();
-                    save_algorithm_variables(rest, nvs.as_ref().clone()).unwrap();
-                    b"ok".to_vec()
-                } else {
-                    b"unknown_command".to_vec()
-                }
-            }
+        let mut response = if let Some(rest) = data.strip_prefix("set_algo:") {
+            info!("Setting algo variables");
+            let nvs = self.run_data.nvs.clone();
+            save_algorithm_variables(rest, nvs.as_ref().clone()).unwrap();
+            b"ok".to_vec()
+        } else if let Some(rest) = data.strip_prefix("auto_calibrate:") {
+            info!("Setting algo");
+            let d = auto_calibrate(
+                rest.to_string(),
+                self.run_data.rgb.clone(),
+                self.run_data.saved_rgb_multipliers.clone(),
+                self.run_data.nvs.clone(),
+                self.run_data.lux_buffer.clone(),
+            );
+            info!("Done! {:?}", d);
+            d.into_bytes()
+        } else {
+            b"unknown_command".to_vec()
         };
+
         response.insert(0, b'S');
-        self.notify_ind(&response).unwrap();
-        info!("Response: {response:?}");
-        let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
-        *unlocked_is_subscribed = true;
+        info!("Sending response");
+        // let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+        // *unlocked_is_subscribed = false;
+        // self.notify_ind(&response).unwrap();
+        // info!("Response: {response:?}");
+        {
+            let mut unlocked_is_subscribed = self.is_subscribed.lock().unwrap();
+            *unlocked_is_subscribed = true;
+        }
     }
 }
