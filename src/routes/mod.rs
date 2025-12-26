@@ -27,22 +27,6 @@ static STYLE_CSS: &str = include_str!("static/style.css");
 static SCRIPT_JS: &str = include_str!("static/script.js");
 static SCRIPT_CALIBRATE_JS: &str = include_str!("static/calibrate/script.js");
 static CALIBRATE_HTML: &str = include_str!("static/calibrate/index.html");
-
-impl WsHandler {
-    pub async fn server_index_page<T, const N: usize>(
-        &self,
-        conn: &mut Connection<'_, T, N>,
-    ) -> Result<(), WsHandlerError<EdgeError<T::Error>>>
-    where
-        T: Read + Write,
-    {
-        conn.initiate_response(200, None, &[("Content-Type", "text/html")])
-            .await?;
-        conn.write_all(INDEX_HTML.as_bytes()).await?;
-        Ok(())
-    }
-}
-
 impl WsHandler {
     /*
        pub async fn spoolman_get_filaments<T, const N: usize>(
@@ -239,7 +223,6 @@ impl Handler for WsHandler {
             conn.initiate_response(200, None, &[("Content-Type", "text/html")])
                 .await?;
             conn.write_all(INDEX_HTML.as_bytes()).await?;
-            WsHandler::server_index_page(self, conn).await?;
         } else if headers.path == "/style.css" {
             conn.initiate_response(200, None, &[("Content-Type", "text/css")])
                 .await?;
