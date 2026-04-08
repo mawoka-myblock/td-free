@@ -35,14 +35,10 @@ jobs:
           ldproxy: true
       - name: Setup | Std
         run: rustup component add rust-src --toolchain nightly-2025-06-28
-      - uses: Swatinem/rust-cache@v2
       - name: Install Cargo-Binstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
         run: cargo binstall espflash@=3.3.0 --no-confirm --force
-      - name: Setup | Checkout
-        uses: actions/checkout@v4
-
       - name: Install MinIO Client
         run: |
           curl https://dl.min.io/client/mc/release/linux-amd64/mc --create-dirs -o $HOME/minio-binaries/mc
@@ -54,6 +50,9 @@ jobs:
           MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
           MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
           MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      - name: Setup | Checkout
+        uses: actions/checkout@v5
+      - uses: Swatinem/rust-cache@v2
 
       - name: Extract Data
         id: extract_version
