@@ -217,6 +217,7 @@ pub async fn read_data_with_buffer(
 
     // Take multiple readings for median calculation with longer delays
     let readings_per_call = 3;
+    let mut clear_reading = 0;
     for i in 0..readings_per_call {
         // Longer delay to ensure fresh VEML7700 readings
         if i > 0 {
@@ -227,21 +228,24 @@ pub async fn read_data_with_buffer(
             let mut locked_veml = veml.lock().unwrap();
             let mut buffer = lux_buffer.lock().unwrap();
             let lux_reading = locked_veml.read_lux().unwrap_or(0.0);
+            log::debug!("Raw lux: {}", lux_reading);
             buffer.push(lux_reading);
         }
         if let Some(d) = rgb_data.clone() {
             let mut locked_rgb = d.veml_rgb.lock().unwrap();
-            if let (Ok(r), Ok(g), Ok(b)) = (
+            if let (Ok(r), Ok(g), Ok(b), Ok(c)) = (
                 locked_rgb.read_red().await,
                 locked_rgb.read_green().await,
                 locked_rgb.read_blue().await,
+                locked_rgb.read_clear().await,
             ) {
-                log::debug!("RGB readings {}: R={}, G={}, B={}", i + 1, r, g, b);
+                log::debug!("RGB readings {}: R={}, G={}, B={}, C={}", i + 1, r, g, b, c);
 
                 let mut buffers = d.rgb_buffers.lock().unwrap();
                 buffers.0.push(r);
                 buffers.1.push(g);
                 buffers.2.push(b);
+                clear_reading = c;
             }
             drop(locked_rgb); // Release lock
         }
@@ -261,9 +265,9 @@ pub async fn read_data_with_buffer(
         buffer.median().unwrap_or(median_reading) // Fallback to detection median if buffer is empty
     };
 
-    let td_value = (final_median_lux / baseline_reading) * 10.0;
-    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
     if rgb_data.is_none() {
+        let td_value = (final_median_lux / baseline_reading) * 10.0;
+        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         return Some(format!("{adjusted_td_value:.2},,"));
     }
     let rgb_d = rgb_data.unwrap();
@@ -275,6 +279,39 @@ pub async fn read_data_with_buffer(
             buffers.2.median().unwrap_or(rgb_d.rgb_baseline.2),
         )
     };
+
+    // let td_value = (final_median_lux / baseline_reading) * 10.0;
+    // let rgb_sum = (r_median_raw + g_median_raw + b_median_raw) as f32;
+
+    // let chroma_r = r_median_raw as f32 / rgb_sum;
+    // let chroma_g = g_median_raw as f32 / rgb_sum;
+    // let chroma_b = b_median_raw as f32 / rgb_sum;
+
+    // compensate spectral bias (tune these!)
+    // let spectral_weight = 0.15 * chroma_g +   // green dominates lux sensor
+    //     0.65 * chroma_r +
+    //     0.2 * chroma_b;
+
+    // let clear_lux_ratio = clear_reading as f32 / final_median_lux.max(1.0);
+    // let spectral_correction = (clear_lux_ratio / 3.5).powf(0.8);
+    // let td_value = (final_median_lux / baseline_reading) * spectral_correction * 10.0;
+    // let hue = compute_hue(r_median_raw, g_median_raw, b_median_raw);
+
+    // Correction factor lookup based on hue
+    // Fitted from calibration data
+    let spectral_correction = spectral_correction_from_rgb(r_median_raw, g_median_raw);
+
+    let td_value = (final_median_lux / baseline_reading) * spectral_correction * 10.0;
+
+    log::debug!(
+        "Correction: {}, raw_median_lux: {}, baseline: {}, td: {}",
+        spectral_correction,
+        final_median_lux,
+        baseline_reading,
+        td_value
+    );
+
+    let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
 
     // Calculate TD from RAW lux reading
 
@@ -360,3 +397,59 @@ pub async fn read_data_with_buffer(
 
     Some(ws_message)
 }
+
+pub fn spectral_correction_from_rgb(r: u16, g: u16) -> f32 {
+    let r_g_ratio = r as f32 / g.max(1) as f32;
+
+    if r_g_ratio > 1.0 {
+        // Magenta/red-dominant: R/G=1.0 → 1.0x, R/G=2.25 → 5.28x
+        1.0 + (r_g_ratio - 1.0) / 1.25 * 4.28
+    } else {
+        1.0
+    }
+}
+/*
+pub fn spectral_correction_from_hue(hue: f32) -> f32 {
+    // Anchor points: (hue_degrees, correction_factor)
+    // Fitted from calibration measurements
+    let anchors: [(f32, f32); 6] = [
+        (0.0, 7.19),   // Red
+        (60.0, 2.19),  // Yellow
+        (90.0, 2.36),  // Lime
+        (175.0, 3.03), // Teal
+        (300.0, 5.19), // Magenta
+        (360.0, 7.19), // Red again (wrap)
+    ];
+
+    // Find surrounding anchors and interpolate
+    for i in 0..anchors.len() - 1 {
+        let (h0, c0) = anchors[i];
+        let (h1, c1) = anchors[i + 1];
+        if hue >= h0 && hue <= h1 {
+            let t = (hue - h0) / (h1 - h0);
+            return c0 + t * (c1 - c0);
+        }
+    }
+    3.0 // fallback for neutral/white filaments
+}
+
+pub fn compute_hue(r: u16, g: u16, b: u16) -> f32 {
+    let r = r as f32;
+    let g = g as f32;
+    let b = b as f32;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    if delta < 1.0 {
+        return 0.0;
+    }
+    let hue = if max == r {
+        60.0 * (((g - b) / delta) % 6.0)
+    } else if max == g {
+        60.0 * (((b - r) / delta) + 2.0)
+    } else {
+        60.0 * (((r - g) / delta) + 4.0)
+    };
+    if hue < 0.0 { hue + 360.0 } else { hue }
+}
+ */

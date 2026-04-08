@@ -49,7 +49,7 @@ pub async fn take_rgb_white_balance_calibration(
                 locked_veml.read_clear().await,
             ) {
                 (Ok(r), Ok(g), Ok(b), Ok(clear)) => {
-                    log::debug!(
+                    log::warn!(
                         "Brightness {brightness}% sample {i}: R={r}, G={g}, B={b}, Clear={clear}"
                     );
                     r_readings.push(r);
