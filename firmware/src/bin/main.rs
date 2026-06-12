@@ -1,5 +1,5 @@
 #![no_std]
-#![feature(type_alias_impl_trait)]
+#![recursion_limit = "512"]
 #![no_main]
 #![deny(
     clippy::mem_forget,
@@ -8,33 +8,22 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_net::IpCidr;
 use embassy_net::Ipv4Cidr;
 use embassy_net::StaticConfigV4;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
-use esp_hal::rmt::Rmt;
-use esp_hal::time::Rate;
 use esp_hal::timer::timg::TimerGroup;
-use esp_hal_smartled::SmartLedsAdapterAsync;
-use esp_hal_smartled::buffer_size_async;
 use esp_println as _;
-use esp_radio::ble::controller::BleConnector;
 use esp_radio::wifi::ControllerConfig;
 use esp_radio::wifi::ap::AccessPointConfig;
+use firmware::CLIENT_CONNECTED;
 use firmware::tasks;
 use picoserve::AppBuilder;
-use static_cell::make_static;
-use trouble_host::prelude::*;
 
 extern crate alloc;
-
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
@@ -83,9 +72,10 @@ async fn main(spawner: Spawner) -> ! {
     // let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
     //     HostResources::new();
     // let _stack = trouble_host::new(ble_controller, &mut resources);
+    CLIENT_CONNECTED.sender().send(false);
 
-    spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
     spawner.spawn(tasks::leds::main_led_task(peripherals.LEDC, peripherals.GPIO7).unwrap());
+    spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
 
     spawner.spawn(
         tasks::sensors::sensor_task(
@@ -119,8 +109,8 @@ async fn main(spawner: Spawner) -> ! {
         interfaces.access_point,
         config,
         firmware::mk_static!(
-            embassy_net::StackResources<5>,
-            embassy_net::StackResources::<5>::new()
+            embassy_net::StackResources<7>,
+            embassy_net::StackResources::<7>::new()
         ),
         seed,
     );
@@ -130,17 +120,16 @@ async fn main(spawner: Spawner) -> ! {
         tasks::http::AppProps::new().build_app()
     );
 
-    spawner.spawn(tasks::http::connection(wifi_controller).unwrap());
-    spawner.spawn(tasks::http::net_task(runner).unwrap());
-    spawner.spawn(tasks::http::run_dhcp(stack).unwrap());
-    spawner.spawn(tasks::http::captive_dns(stack).unwrap());
+    spawner.spawn(tasks::http::network::listen_for_connect_event_wifi_ap(wifi_controller).unwrap());
+    spawner.spawn(tasks::http::network::net_task(runner).unwrap());
+    spawner.spawn(tasks::http::network::run_dhcp_server(stack).unwrap());
+    spawner.spawn(tasks::http::network::captive_dns(stack).unwrap());
 
     for task_id in 0..tasks::http::WEB_TASK_POOL_SIZE {
         spawner.spawn(tasks::http::web_task(task_id, stack, app).unwrap());
     }
 
     loop {
-        info!("Hello world!");
         Timer::after(Duration::from_secs(1)).await;
     }
 

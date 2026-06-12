@@ -1,7 +1,6 @@
 #![allow(dead_code)]
 
 use defmt::Format;
-use embassy_time::Timer;
 use embedded_hal::i2c::I2c;
 
 /// All possible errors in this crate
@@ -19,7 +18,7 @@ const DEVICE_ADDRESS: u8 = 0x10;
 
 /// VEML3328 device driver.
 #[derive(Debug)]
-pub struct VEML3328<I2C> {
+pub struct Veml3328<I2C> {
     /// The concrete I²C device implementation.
     i2c: I2C,
     config: Config,
@@ -181,12 +180,12 @@ impl Config {
     }
 }
 
-impl<I2C> VEML3328<I2C>
+impl<I2C> Veml3328<I2C>
 where
     I2C: I2c,
 {
     pub fn new(i2c: I2C) -> Self {
-        VEML3328 {
+        Veml3328 {
             i2c,
             config: Config::new(),
         }
@@ -212,7 +211,6 @@ where
             .set_bits(bits::GAIN_MASK, bits::GAIN_ONE);
 
         self.set_config(config)?;
-        Timer::after_millis(150);
         Ok(())
     }
 

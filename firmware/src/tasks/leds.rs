@@ -1,4 +1,9 @@
-use embassy_time::Timer;
+use defmt::info;
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex,
+    pubsub::{PubSubBehavior, PubSubChannel},
+};
+use embedded_hal::pwm::SetDutyCycle;
 use esp_hal::{
     ledc::{
         Ledc, LowSpeed,
@@ -11,6 +16,14 @@ use esp_hal::{
 };
 use esp_hal_smartled::{SmartLedsAdapterAsync, buffer_size_async};
 use smart_leds::{RGB8, SmartLedsWriteAsync};
+
+static LED_COMMAND_CHANNEL: PubSubChannel<CriticalSectionRawMutex, u8, 2, 1, 1> =
+    PubSubChannel::new();
+
+/// brightness in %
+pub fn set_led_brightness(brightness: u8) {
+    LED_COMMAND_CHANNEL.publish_immediate(brightness);
+}
 
 #[embassy_executor::task]
 pub async fn rgb_led_task(rmt_per: RMT<'static>, p4: GPIO4<'static>) {
@@ -42,6 +55,10 @@ pub async fn main_led_task(ledc_per: LEDC<'static>, p7: GPIO7<'static>) {
         drive_mode: esp_hal::gpio::DriveMode::PushPull,
     })
     .unwrap();
-    Timer::after_secs(5).await;
-    l.set_duty(20).unwrap();
+    let mut sub = LED_COMMAND_CHANNEL.subscriber().unwrap();
+    info!("Listening LED");
+    loop {
+        let msg = sub.next_message_pure().await;
+        l.set_duty_cycle_percent(msg).unwrap();
+    }
 }

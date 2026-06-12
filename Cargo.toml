@@ -1,0 +1,6 @@
+[workspace]
+members = [
+  "firmware"
+]
+
+resolver = "2"

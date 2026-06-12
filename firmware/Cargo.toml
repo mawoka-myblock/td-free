@@ -93,6 +93,11 @@ edge-nal = { git = "https://github.com/sysgrok/edge-net" }
 edge-nal-embassy = { git = "https://github.com/sysgrok/edge-net" }
 edge-captive = { git = "https://github.com/sysgrok/edge-net" }
 
+embassy-sync = { version = "*", features = ["defmt"] }
+embassy-futures = { version = "*", features = ["defmt"] }
+
+micromath = { version = "*" }
+
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]
 # The default debug profile is too slow and too big for resource-constrained devices.
