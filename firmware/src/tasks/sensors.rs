@@ -41,6 +41,7 @@ pub async fn sensor_task(
     let has_color = true;
 
     let mut v77 = get_v77();
+    v77.enable().unwrap();
     Timer::after_millis(200).await;
     set_led_brightness(100);
     info!("LED at 100%");
@@ -59,6 +60,8 @@ pub async fn sensor_task(
     )> = None;
     if has_color {
         let mut v33 = get_v33();
+        v33.enable().unwrap();
+        Timer::after_millis(5).await;
         rgb_white_balance = Some(take_rgb_white_balance_calibration(&mut v33).await);
         rgb_bufs = Some((
             RunningMedianBuffer::new(),
