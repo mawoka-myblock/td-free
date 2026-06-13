@@ -45,10 +45,11 @@ pub async fn sensor_task(
     Timer::after_millis(200).await;
     set_led_brightness(100);
     info!("LED at 100%");
+    Timer::after_millis(150).await;
     let v77_baseline_bright = take_baseline_reading(&mut v77).await;
     set_led_brightness(25);
     info!("LED at 25%");
-    Timer::after_millis(50).await;
+    Timer::after_millis(150).await;
     let v77_baseline_dark = take_baseline_reading(&mut v77).await;
 
     drop(v77);
@@ -89,7 +90,7 @@ pub async fn sensor_task(
         }
         let saved_algorithm = settings_sub.try_get().expect("No Settings available").algo;
 
-        let (is_filament_inserted, median_reading) = {
+        let (is_filament_inserted, _) = {
             let mut v77 = get_v77();
             is_filament_inserted(&mut v77, v77_baseline_dark, saved_algorithm.threshold).await
         };
@@ -124,13 +125,14 @@ pub async fn sensor_task(
         });
 
         set_led_brightness(100);
+        Timer::after_millis(300).await;
 
         let readings_per_call = 3;
 
         for i in 0..readings_per_call {
             // Longer delay to ensure fresh VEML7700 readings
             if i > 0 {
-                embassy_time::Timer::after_millis(100).await; // Increased from 15ms to 60ms
+                Timer::after_millis(100).await; // Increased from 15ms to 60ms
             }
 
             {
@@ -158,7 +160,7 @@ pub async fn sensor_task(
         }
         let buffer_count = lux_buf.len();
 
-        let final_median_lux = lux_buf.median().unwrap_or(median_reading);
+        let final_median_lux = lux_buf.median().unwrap();
 
         if !has_color {
             let td_value = (final_median_lux / v77_baseline_bright) * 10.0;
