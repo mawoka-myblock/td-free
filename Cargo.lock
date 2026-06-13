@@ -471,7 +471,7 @@ dependencies = [
 [[package]]
 name = "edge-captive"
 version = "0.7.0"
-source = "git+https://github.com/sysgrok/edge-net#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
+source = "git+https://github.com/sysgrok/edge-net?rev=1f084b4#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
 dependencies = [
  "domain",
  "edge-nal",
@@ -480,7 +480,7 @@ dependencies = [
 [[package]]
 name = "edge-dhcp"
 version = "0.7.0"
-source = "git+https://github.com/sysgrok/edge-net#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
+source = "git+https://github.com/sysgrok/edge-net?rev=1f084b4#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
 dependencies = [
  "edge-nal",
  "edge-raw",
@@ -494,7 +494,7 @@ dependencies = [
 [[package]]
 name = "edge-nal"
 version = "0.6.0"
-source = "git+https://github.com/sysgrok/edge-net#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
+source = "git+https://github.com/sysgrok/edge-net?rev=1f084b4#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
 dependencies = [
  "embassy-time",
  "embedded-io-async 0.7.0",
@@ -503,7 +503,7 @@ dependencies = [
 [[package]]
 name = "edge-nal-embassy"
 version = "0.8.1"
-source = "git+https://github.com/sysgrok/edge-net#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
+source = "git+https://github.com/sysgrok/edge-net?rev=1f084b4#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
 dependencies = [
  "edge-nal",
  "embassy-futures",
@@ -514,7 +514,7 @@ dependencies = [
 [[package]]
 name = "edge-raw"
 version = "0.7.0"
-source = "git+https://github.com/sysgrok/edge-net#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
+source = "git+https://github.com/sysgrok/edge-net?rev=1f084b4#1f084b41944c35b233cbe17accfbc09a56d5eaf0"
 
 [[package]]
 name = "embassy-embedded-hal"
@@ -965,7 +965,7 @@ dependencies = [
 [[package]]
 name = "esp-hal-smartled"
 version = "0.17.0"
-source = "git+https://github.com/florianL21/esp-hal-community#728d7f9b6024f7a0b9eeaa732178da42b76c9c8c"
+source = "git+https://github.com/florianL21/esp-hal-community?rev=728d7f9#728d7f9b6024f7a0b9eeaa732178da42b76c9c8c"
 dependencies = [
  "defmt 1.1.0",
  "document-features",

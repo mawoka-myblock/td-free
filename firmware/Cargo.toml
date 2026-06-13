@@ -78,7 +78,7 @@ portable-atomic = { version = "1.13", default-features = false }
 
 
 smart-leds = "0.4"
-esp-hal-smartled = { git = "https://github.com/florianL21/esp-hal-community", features = ["defmt"] }
+esp-hal-smartled = { git = "https://github.com/florianL21/esp-hal-community", features = ["defmt"], rev = "728d7f9" }
 
 embedded-hal = { version = "1", features = ["defmt-03"] }
 embedded-hal-async = { version = "1", features = ["defmt-03"] }
@@ -90,10 +90,10 @@ serde = { version = "1", default-features = false, features = ["derive"] }
 serde-json-core = { version = "0.6" }
 heapless = { version = "*", features = ["serde"] }
 
-edge-dhcp = { git = "https://github.com/sysgrok/edge-net" }
-edge-nal = { git = "https://github.com/sysgrok/edge-net" }
-edge-nal-embassy = { git = "https://github.com/sysgrok/edge-net" }
-edge-captive = { git = "https://github.com/sysgrok/edge-net" }
+edge-dhcp = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-nal = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-nal-embassy = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-captive = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
 
 embassy-sync = { version = "*", features = ["defmt"] }
 embassy-futures = { version = "*", features = ["defmt"] }
