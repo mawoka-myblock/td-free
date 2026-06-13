@@ -23,7 +23,7 @@ export function Button({
 	onClick,
 }: ButtonProps) {
 	const baseClass =
-		"text-black w-full px-4 py-2 leading-5 transition-all duration-200 transform bg-[#B07156] rounded-sm text-center outline-hidden";
+		"text-black w-full px-4 py-2 leading-5 transition-all duration-200 transform bg-[#B07156] rounded-sm text-center outline-hidden border-none text-base";
 
 	const disabledClass = disabled
 		? "opacity-50 cursor-not-allowed pointer-events-none"

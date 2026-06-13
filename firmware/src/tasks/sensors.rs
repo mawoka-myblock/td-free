@@ -1,5 +1,5 @@
 use core::fmt::Write;
-use defmt::{debug, info, unwrap};
+use defmt::{Debug2Format, debug, info, unwrap};
 use embassy_time::Timer;
 use esp_hal::{
     Blocking,
@@ -11,9 +11,10 @@ use heapless::String;
 use veml7700::Veml7700;
 
 use crate::{
-    CLIENT_CONNECTED, DEVICE_STATE, DeviceState, MEASUREMENT_DATA, MeasurementData,
+    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, DEVICE_STATE, DeviceState, MEASUREMENT_DATA_WATCH,
+    MeasurementData, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
     helpers::{
-        RGBMultipliers,
+        calibration::auto_calibrate_gray_reference,
         median_buffer::RunningMedianBuffer,
         v33::{
             apply_rgb_multipliers, apply_spectral_response_correction,
@@ -22,7 +23,7 @@ use crate::{
         v77::{is_filament_inserted, take_baseline_reading},
         veml3328::Veml3328,
     },
-    tasks::leds::set_led_brightness,
+    tasks::{leds::set_led_brightness, states::init_dev_info},
 };
 
 pub type VEML7700<'d> = Veml7700<I2c<'d, Blocking>>;
@@ -38,7 +39,6 @@ pub async fn sensor_task(
 ) {
     let dev_state_sender = DEVICE_STATE.sender();
     dev_state_sender.send(DeviceState::Warmup);
-    let has_color = true;
 
     let mut v77 = get_v77();
     v77.enable().unwrap();
@@ -58,9 +58,12 @@ pub async fn sensor_task(
         RunningMedianBuffer<100>,
         RunningMedianBuffer<100>,
     )> = None;
+
+    let mut v33 = get_v33();
+    let has_color = v33.enable().is_ok();
+    init_dev_info(has_color).await;
+
     if has_color {
-        let mut v33 = get_v33();
-        v33.enable().unwrap();
         Timer::after_millis(5).await;
         rgb_white_balance = Some(take_rgb_white_balance_calibration(&mut v33).await);
         rgb_bufs = Some((
@@ -70,25 +73,25 @@ pub async fn sensor_task(
         ));
     }
 
-    let rgb_multipliers = RGBMultipliers::default(); // TODO
-
     let mut lux_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
 
     let mut client_connected_sub = unwrap!(CLIENT_CONNECTED.receiver());
+    let mut rgb_multi_sub = RGB_MULTIPLIERS_WATCH.anon_receiver();
+    let mut settings_sub = SETTINGS_DATA_WATCH.anon_receiver();
+    let mut calib_sub = unwrap!(CALIBRATE_REF_CHANNEL.subscriber());
 
-    let threshold = 0.9;
-
-    let mm_data_pub = MEASUREMENT_DATA.sender();
+    let mm_data_pub = MEASUREMENT_DATA_WATCH.sender();
 
     loop {
         if client_connected_sub.get().await == false {
             set_led_brightness(0);
             client_connected_sub.changed().await;
         }
+        let saved_algorithm = settings_sub.try_get().expect("No Settings available").algo;
 
         let (is_filament_inserted, median_reading) = {
             let mut v77 = get_v77();
-            is_filament_inserted(&mut v77, v77_baseline_dark, threshold).await
+            is_filament_inserted(&mut v77, v77_baseline_dark, saved_algorithm.threshold).await
         };
 
         if !is_filament_inserted {
@@ -159,15 +162,39 @@ pub async fn sensor_task(
 
         if !has_color {
             let td_value = (final_median_lux / v77_baseline_bright) * 10.0;
-            // let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
+            let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
             mm_data_pub.send(Some(MeasurementData {
-                td: td_value,
+                td: adjusted_td_value,
                 buf_count: Some(buffer_count as u32),
                 hex_color: None,
             }));
         }
-
+        let rgb_multipliers = rgb_multi_sub
+            .try_get()
+            .expect("No RGB Multipliers available");
         let rgb_wb = rgb_white_balance.unwrap();
+
+        if let Some(cmd) = calib_sub.try_next_message_pure() {
+            info!("Calibration requested");
+
+            let result = auto_calibrate_gray_reference(
+                cmd,
+                final_median_lux,
+                &rgb_bufs.as_mut().unwrap(),
+                rgb_wb,
+                rgb_multipliers,
+            )
+            .await;
+
+            match result {
+                Ok(cal) => {
+                    RGB_MULTIPLIERS_WATCH.sender().send(cal);
+                }
+                Err(e) => {
+                    info!("Calibration failed: {:?}", Debug2Format(&e));
+                }
+            }
+        }
 
         // Do color work from here only
         let (r_median_raw, g_median_raw, b_median_raw) = {
@@ -221,8 +248,9 @@ pub async fn sensor_task(
         )
         .unwrap();
 
+        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         mm_data_pub.send(Some(MeasurementData {
-            td: td_value,
+            td: adjusted_td_value,
             buf_count: Some(buffer_count as u32),
             hex_color: Some(hex_color),
         }));

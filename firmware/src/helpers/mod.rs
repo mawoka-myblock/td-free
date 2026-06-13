@@ -1,11 +1,14 @@
 use defmt::Format;
+use serde::{Deserialize, Serialize};
 
+pub mod calibration;
 pub mod median_buffer;
+pub mod storage;
 pub mod v33;
 pub mod v77;
 pub mod veml3328;
 
-#[derive(Debug, Clone, Copy, Format)]
+#[derive(Debug, Clone, Copy, Format, Deserialize, Serialize)]
 pub struct RGBMultipliers {
     pub red: f32,
     pub green: f32,

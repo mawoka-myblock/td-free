@@ -4,9 +4,19 @@
 
 use core::fmt::Write;
 use defmt::Format;
-use embassy_sync::{blocking_mutex::raw::CriticalSectionRawMutex, watch::Watch};
+use embassy_sync::{
+    blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, pubsub::PubSubChannel, watch::Watch,
+};
 use heapless::String;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+
+use crate::helpers::{
+    RGBMultipliers,
+    calibration::CalibrationCommand,
+    storage::{Settings, WifiCreds, nvs::Nvs},
+};
+
+extern crate alloc;
 
 pub mod helpers;
 pub mod tasks;
@@ -49,5 +59,39 @@ where
     serializer.serialize_str(&s)
 }
 
-pub static MEASUREMENT_DATA: Watch<CriticalSectionRawMutex, Option<MeasurementData>, 2> =
+pub static MEASUREMENT_DATA_WATCH: Watch<CriticalSectionRawMutex, Option<MeasurementData>, 2> =
     Watch::new();
+
+pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Watch::new();
+
+pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers, 1> = Watch::new();
+
+pub type NvsMutex = Mutex<CriticalSectionRawMutex, Nvs>;
+pub const NVS_OFFSET: usize = 0x9000;
+pub const NVS_SIZE: usize = 0x6000;
+
+#[derive(Debug, Format, Clone)]
+pub enum DataUpdate {
+    Settings(Settings),
+    RgbMulti(RGBMultipliers),
+    Wifi(WifiCreds),
+}
+
+pub static DATA_UPDATE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, DataUpdate, 2, 1, 1> =
+    PubSubChannel::new();
+
+#[derive(Debug, Format, Clone, Deserialize, Serialize)]
+pub struct DeviceInfo {
+    has_color: bool,
+    version: String<20>,
+}
+
+pub static DEVICE_INFO_WATCH: Watch<CriticalSectionRawMutex, DeviceInfo, 1> = Watch::new();
+
+pub static CALIBRATE_REF_CHANNEL: PubSubChannel<
+    CriticalSectionRawMutex,
+    CalibrationCommand,
+    2,
+    1,
+    1,
+> = PubSubChannel::new();

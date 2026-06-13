@@ -1,4 +1,4 @@
-use defmt::{Debug2Format, error, info, unwrap, warn};
+use defmt::{Debug2Format, error, info, unwrap};
 use embassy_time::Timer;
 use heapless::Vec;
 use micromath::F32Ext;
@@ -97,21 +97,22 @@ pub async fn is_filament_inserted<'d>(
     }
     detection_readings.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median_reading = detection_readings[1]; // Middle value (median of 3)
-    // let mean = detection_readings.iter().sum::<f32>() / 3.0;
-    // let variance = detection_readings
-    //     .iter()
-    //     .map(|x| (x - mean).powi(2))
-    //     .sum::<f32>()
-    //     / 3.0;
-    // let std_dev = variance.sqrt();
+    /*
+    let mean = detection_readings.iter().sum::<f32>() / 3.0;
+    let variance = detection_readings
+        .iter()
+        .map(|x| (x - mean).powi(2))
+        .sum::<f32>()
+        / 3.0;
+    let std_dev = variance.sqrt();
 
-    // if std_dev < 0.01 && median_reading > 10.0 {
-    //     warn!(
-    //         "VEML7700 readings very similar (std_dev: {}) - sensor might need more time",
-    //         std_dev
-    //     );
-    // }
-
+    if std_dev < 0.01 && median_reading > 10.0 {
+        warn!(
+            "VEML7700 readings very similar (std_dev: {}) - sensor might need more time",
+            std_dev
+        );
+    }
+ */
     let current_threshold = dark_baseline_reading - (1.0 - threshold) * dark_baseline_reading;
     if median_reading > current_threshold {
         (false, median_reading)

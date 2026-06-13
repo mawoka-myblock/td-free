@@ -74,6 +74,8 @@ esp-storage = { version  = "0.9", features = ["esp32c3"] }
 tickv = { version = "2" }
 embedded-storage = { version = "*" }
 anyhow = {version = "*", default-features = false}
+portable-atomic = { version = "1.13", default-features = false }
+
 
 smart-leds = "0.4"
 esp-hal-smartled = { git = "https://github.com/florianL21/esp-hal-community", features = ["defmt"] }
@@ -97,6 +99,11 @@ embassy-sync = { version = "*", features = ["defmt"] }
 embassy-futures = { version = "*", features = ["defmt"] }
 
 micromath = { version = "*" }
+
+postcard = { version = "1.1" }
+
+thiserror = { version = "2", default-features = false }
+
 
 # For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
 [profile.dev]

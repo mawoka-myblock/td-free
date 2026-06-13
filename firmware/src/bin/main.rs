@@ -7,22 +7,29 @@
     holding buffers for the duration of a data transfer."
 )]
 #![deny(clippy::large_stack_frames)]
-
 use defmt::info;
+use defmt::warn;
 use embassy_executor::Spawner;
+use embassy_futures::select::Either;
+use embassy_futures::select::select;
 use embassy_net::Ipv4Cidr;
 use embassy_net::StaticConfigV4;
+use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
+use esp_hal::system::software_reset;
 use esp_hal::timer::timg::TimerGroup;
 use esp_println as _;
 use esp_radio::wifi::ControllerConfig;
 use esp_radio::wifi::ap::AccessPointConfig;
+use esp_radio::wifi::sta::StationConfig;
 use firmware::CLIENT_CONNECTED;
-use firmware::tasks;
+use firmware::helpers::storage::NvsStored as _;
+use firmware::helpers::storage::WifiCreds;
+use firmware::helpers::storage::nvs::Nvs;
+use firmware::{NvsMutex, tasks};
 use picoserve::AppBuilder;
-
 extern crate alloc;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -74,6 +81,14 @@ async fn main(spawner: Spawner) -> ! {
     // let _stack = trouble_host::new(ble_controller, &mut resources);
     CLIENT_CONNECTED.sender().send(false);
 
+    let nvs: &'static NvsMutex = firmware::mk_static!(
+        NvsMutex,
+        Mutex::new(Nvs::new(firmware::NVS_OFFSET, firmware::NVS_SIZE, peripherals.FLASH).unwrap())
+    );
+
+    let wifi_creds = tasks::states::init_signals_and_get_wifi_creds(nvs).await;
+
+    spawner.spawn(tasks::states::data_update_save_task(nvs).unwrap());
     spawner.spawn(tasks::leds::main_led_task(peripherals.LEDC, peripherals.GPIO7).unwrap());
     spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
 
@@ -87,43 +102,104 @@ async fn main(spawner: Spawner) -> ! {
         )
         .unwrap(),
     );
-    let ap_config = esp_radio::wifi::Config::AccessPoint(
-        AccessPointConfig::default()
-            .with_ssid("Td-Free")
-            .with_auth_method(esp_radio::wifi::AuthenticationMethod::None),
-    );
-    let (wifi_controller, interfaces) = esp_radio::wifi::new(
-        peripherals.WIFI,
-        ControllerConfig::default().with_initial_config(ap_config),
-    )
-    .expect("Failed to initialize Wi-Fi controller");
-    let ipv4_cfg = StaticConfigV4 {
-        address: Ipv4Cidr::new(embassy_net::Ipv4Address::new(10, 10, 10, 1), 24),
-        dns_servers: Default::default(),
-        gateway: Some(embassy_net::Ipv4Address::new(10, 10, 10, 1)),
+    let (iface, net_config, wifi_controller) = if let Some(wf_creds) = wifi_creds.clone() {
+        info!("Wifi creds: {}", wf_creds);
+        let sta_config = esp_radio::wifi::Config::Station(
+            StationConfig::default()
+                .with_ssid(wf_creds.ssid.as_str())
+                .with_password(wf_creds.password.as_str().into()),
+        );
+        let (mut wifi_controller, interfaces) = esp_radio::wifi::new(
+            peripherals.WIFI,
+            ControllerConfig::default().with_initial_config(sta_config),
+        )
+        .expect("Failed to initialize Wi-Fi controller");
+
+        let connect_is_err = wifi_controller.connect_async().await.is_err();
+        if connect_is_err {
+            warn!("Resetting wifi creds");
+            let _ = WifiCreds::delete(nvs).await;
+            Timer::after_millis(200).await;
+            software_reset();
+        }
+
+        let mut dhcp_cfg = embassy_net::DhcpConfig::default();
+
+        let mut hostname = heapless::String::new();
+        hostname.push_str("td-free.local").unwrap();
+        dhcp_cfg.hostname = Some(hostname);
+        (
+            interfaces.station,
+            embassy_net::Config::dhcpv4(dhcp_cfg),
+            wifi_controller,
+        )
+    } else {
+        let ap_config = esp_radio::wifi::Config::AccessPoint(
+            AccessPointConfig::default()
+                .with_ssid("Td-Free")
+                .with_auth_method(esp_radio::wifi::AuthenticationMethod::None),
+        );
+        let (wifi_controller, interfaces) = esp_radio::wifi::new(
+            peripherals.WIFI,
+            ControllerConfig::default().with_initial_config(ap_config),
+        )
+        .expect("Failed to initialize Wi-Fi controller");
+        let ipv4_cfg = StaticConfigV4 {
+            address: Ipv4Cidr::new(embassy_net::Ipv4Address::new(10, 10, 10, 1), 24),
+            dns_servers: Default::default(),
+            gateway: Some(embassy_net::Ipv4Address::new(10, 10, 10, 1)),
+        };
+
+        (
+            interfaces.access_point,
+            embassy_net::Config::ipv4_static(ipv4_cfg),
+            wifi_controller,
+        )
     };
-    let config = embassy_net::Config::ipv4_static(ipv4_cfg);
-    let rng = esp_hal::rng::Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
     let (stack, runner) = embassy_net::new(
-        interfaces.access_point,
-        config,
+        iface,
+        net_config,
         firmware::mk_static!(
             embassy_net::StackResources<7>,
             embassy_net::StackResources::<7>::new()
         ),
-        seed,
+        make_seed(),
     );
+    spawner.spawn(tasks::http::network::net_task(runner).unwrap());
+
+    if wifi_creds.is_some() {
+        let has_ip_fut = async {
+            info!("Checking for ip addr");
+            loop {
+                if let Some(config) = stack.config_v4() {
+                    info!("Got IP: {}", config.address);
+                    return config.address;
+                }
+                Timer::after_millis(200).await;
+            }
+        };
+        let timeout_fut = Timer::after_secs(600);
+        match select(has_ip_fut, timeout_fut).await {
+            Either::First(_) => (),
+            Either::Second(_) => {
+                warn!("Resetting wifi creds");
+                let _ = WifiCreds::delete(nvs).await;
+                Timer::after_millis(200).await;
+                software_reset()
+            }
+        }
+    } else {
+        spawner.spawn(
+            tasks::http::network::listen_for_connect_event_wifi_ap(wifi_controller).unwrap(),
+        );
+        spawner.spawn(tasks::http::network::run_dhcp_server(stack).unwrap());
+        spawner.spawn(tasks::http::network::captive_dns(stack).unwrap());
+    }
 
     let app = firmware::mk_static!(
         picoserve::AppRouter<tasks::http::AppProps>,
         tasks::http::AppProps::new().build_app()
     );
-
-    spawner.spawn(tasks::http::network::listen_for_connect_event_wifi_ap(wifi_controller).unwrap());
-    spawner.spawn(tasks::http::network::net_task(runner).unwrap());
-    spawner.spawn(tasks::http::network::run_dhcp_server(stack).unwrap());
-    spawner.spawn(tasks::http::network::captive_dns(stack).unwrap());
 
     for task_id in 0..tasks::http::WEB_TASK_POOL_SIZE {
         spawner.spawn(tasks::http::web_task(task_id, stack, app).unwrap());
@@ -132,6 +208,9 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         Timer::after(Duration::from_secs(1)).await;
     }
+}
 
-    // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples
+fn make_seed() -> u64 {
+    let rng = esp_hal::rng::Rng::new();
+    ((rng.random() as u64) << 32) | rng.random() as u64
 }

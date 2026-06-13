@@ -7,7 +7,7 @@ use picoserve::{
     routing::get,
 };
 
-use crate::{CLIENT_CONNECTED, MEASUREMENT_DATA, tasks::http::AppState};
+use crate::{CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH, tasks::http::AppState};
 pub fn event_router() -> picoserve::Router<impl picoserve::routing::PathRouter<AppState>, AppState>
 {
     picoserve::Router::new().route("/data", get(async move || EventStream(Events)))
@@ -34,7 +34,7 @@ impl response::sse::EventSource for Events {
         let _guard = ClientConnectedGuard;
 
         // Subscribe to measurement data changes
-        let mut measurement_rx = MEASUREMENT_DATA
+        let mut measurement_rx = MEASUREMENT_DATA_WATCH
             .receiver()
             .expect("Couldn't get a new receiver for measurement data");
 

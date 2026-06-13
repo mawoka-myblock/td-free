@@ -1,3 +1,4 @@
+mod config;
 mod frontend;
 pub mod network;
 mod sse;
@@ -52,6 +53,7 @@ impl AppBuilder for AppProps {
         picoserve::Router::new()
             .nest("", frontend::frontend_router())
             .nest("/events", sse::event_router())
+            .nest("/config", config::config_router())
             // .nest("/api", api::api_router())
             .with_state(state)
     }
