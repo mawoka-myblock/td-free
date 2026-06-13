@@ -284,7 +284,7 @@ pub fn apply_spectral_response_correction(
 
     info!(
         "Spectral correction: Raw({},{},{}) -> WB factors({},{},{}) -> Final({},{},{})",
-        r, g, b, r_correction, g_correction, g_correction, r_final, g_final, b_final
+        r, g, b, r_correction, g_correction, b_correction, r_final, g_final, b_final
     );
 
     (r_final, g_final, b_final)
