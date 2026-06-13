@@ -33,7 +33,7 @@ impl<const CAPACITY: usize> RunningMedianBuffer<CAPACITY> {
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(Ordering::Equal));
 
         let len = sorted.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             Some((sorted[len / 2 - 1] + sorted[len / 2]) / 2.0)
         } else {
             Some(sorted[len / 2])
@@ -48,6 +48,10 @@ impl<const CAPACITY: usize> RunningMedianBuffer<CAPACITY> {
         self.buffer.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
+    }
+
     pub fn is_full(&self) -> bool {
         self.buffer.len() >= CAPACITY
     }
@@ -58,6 +62,17 @@ pub struct RunningMedianBufferU16<const CAPACITY: usize> {
     buffer: Deque<u16, CAPACITY>,
 }
 
+impl<const CAPACITY: usize> Default for RunningMedianBuffer<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const CAPACITY: usize> Default for RunningMedianBufferU16<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 impl<const CAPACITY: usize> RunningMedianBufferU16<CAPACITY> {
     pub fn new() -> Self {
         Self {
@@ -84,7 +99,7 @@ impl<const CAPACITY: usize> RunningMedianBufferU16<CAPACITY> {
         sorted.sort();
 
         let len = sorted.len();
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             Some((sorted[len / 2 - 1] + sorted[len / 2]) / 2)
         } else {
             Some(sorted[len / 2])
@@ -97,6 +112,10 @@ impl<const CAPACITY: usize> RunningMedianBufferU16<CAPACITY> {
 
     pub fn len(&self) -> usize {
         self.buffer.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.buffer.is_empty()
     }
 
     pub fn is_full(&self) -> bool {

@@ -1,9 +1,9 @@
 use picoserve::{
     response::{
-        File, IntoResponse, StatusCode,
+        File, IntoResponse,
         chunked::{ChunkWriter, ChunkedResponse, Chunks, ChunksWritten},
     },
-    routing::{RequestHandlerService, get, get_service},
+    routing::{get, get_service},
 };
 
 use crate::tasks::http::{AppState, RedirectToPortal};

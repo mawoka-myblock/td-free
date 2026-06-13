@@ -83,7 +83,7 @@ pub async fn sensor_task(
     let mm_data_pub = MEASUREMENT_DATA_WATCH.sender();
 
     loop {
-        if client_connected_sub.get().await == false {
+        if !client_connected_sub.get().await {
             set_led_brightness(0);
             client_connected_sub.changed().await;
         }
@@ -180,7 +180,7 @@ pub async fn sensor_task(
             let result = auto_calibrate_gray_reference(
                 cmd,
                 final_median_lux,
-                &rgb_bufs.as_mut().unwrap(),
+                rgb_bufs.as_mut().unwrap(),
                 rgb_wb,
                 rgb_multipliers,
             )
@@ -206,8 +206,7 @@ pub async fn sensor_task(
             )
         };
 
-        let spectral_correction =
-            spectral_correction_from_rgb(r_median_raw as u16, g_median_raw as u16);
+        let spectral_correction = spectral_correction_from_rgb(r_median_raw, g_median_raw);
 
         let td_value = (final_median_lux / v77_baseline_bright) * spectral_correction * 10.0;
         info!(

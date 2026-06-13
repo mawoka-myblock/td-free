@@ -103,7 +103,7 @@ async fn main(spawner: Spawner) -> ! {
         .unwrap(),
     );
     let (iface, net_config, wifi_controller) = if let Some(wf_creds) = wifi_creds.clone() {
-        info!("Wifi creds: {}", wf_creds);
+        info!("Found wifi creds, trying to connect");
         let sta_config = esp_radio::wifi::Config::Station(
             StationConfig::default()
                 .with_ssid(wf_creds.ssid.as_str())

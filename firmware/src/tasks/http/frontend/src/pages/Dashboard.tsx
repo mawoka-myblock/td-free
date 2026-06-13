@@ -3,6 +3,7 @@ import { ColorSwatch } from "../components/ColorSwatch";
 import { ConfidenceBar } from "../components/ConfidenceBar";
 import { Pages } from "./types";
 import { ButtonLink } from "../components/ButtonLink";
+import { MeasurementChanged } from "../api";
 
 export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 	const [measurement, setMeasurement] = useState<MeasurementChanged | null>(
@@ -14,13 +15,6 @@ export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 					buf_count: 21,
 				},
 	);
-
-	type MeasurementData = {
-		td: string;
-		hex_color?: string;
-		buf_count?: number;
-	};
-	type MeasurementChanged = "no_filament" | MeasurementData;
 
 	function handleSaveToSpoolman() {
 		const id = prompt("Spoolman Filament ID");

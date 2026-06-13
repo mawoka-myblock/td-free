@@ -33,6 +33,13 @@ export type ValueMeasurement = {
 	td: number;
 };
 
+export type MeasurementData = {
+	td: string;
+	hex_color?: string;
+	buf_count?: number;
+};
+export type MeasurementChanged = "no_filament" | MeasurementData;
+
 export type Measurement =
 	| EmptyMeasurement
 	| NoFilamentMeasurement

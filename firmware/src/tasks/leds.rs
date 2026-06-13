@@ -5,13 +5,12 @@ use embassy_sync::{
 };
 use embedded_hal::pwm::SetDutyCycle;
 use esp_hal::{
-    gpio::Output,
     ledc::{
         Ledc, LowSpeed,
         channel::{self, ChannelIFace},
         timer::{self, TimerIFace},
     },
-    peripherals::{self, GPIO4, GPIO7, LEDC, RMT},
+    peripherals::{GPIO4, GPIO7, LEDC, RMT},
     rmt::Rmt,
     time::Rate,
 };

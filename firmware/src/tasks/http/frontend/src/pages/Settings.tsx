@@ -41,7 +41,14 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 				const data = (await res.json()) as Settings;
 
 				if (!cancelled) {
-					setSettings(data);
+					setSettings({
+						led_brightness: round(data.led_brightness, 2),
+						algo: {
+							b: round(data.algo.b),
+							m: round(data.algo.m),
+							threshold: round(data.algo.threshold, 3),
+						},
+					});
 				}
 			} catch (err) {
 				console.error(err);

@@ -170,15 +170,15 @@ pub fn apply_spectral_response_correction(
     let (r_final, g_final, b_final) = if max_corrected > 255.0 {
         let scale = 255.0 / max_corrected;
         (
-            (r_corrected * scale).round().min(255.0).max(0.0) as u8,
-            (g_corrected * scale).round().min(255.0).max(0.0) as u8,
-            (b_corrected * scale).round().min(255.0).max(0.0) as u8,
+            (r_corrected * scale).round().clamp(0.0, 255.0) as u8,
+            (g_corrected * scale).round().clamp(0.0, 255.0) as u8,
+            (b_corrected * scale).round().clamp(0.0, 255.0) as u8,
         )
     } else {
         (
-            r_corrected.min(255.0).max(0.0) as u8,
-            g_corrected.min(255.0).max(0.0) as u8,
-            b_corrected.min(255.0).max(0.0) as u8,
+            r_corrected.clamp(0.0, 255.0) as u8,
+            g_corrected.clamp(0.0, 255.0) as u8,
+            b_corrected.clamp(0.0, 255.0) as u8,
         )
     };
 

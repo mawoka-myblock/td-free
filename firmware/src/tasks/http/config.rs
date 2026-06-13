@@ -1,12 +1,10 @@
 use defmt::info;
 use embassy_futures::select::{Either, select};
-use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex, pubsub::PubSubBehavior, watch::AnonReceiver,
-};
-use embassy_time::{Duration, Timer};
+use embassy_sync::pubsub::PubSubBehavior;
+use embassy_time::Timer;
 use picoserve::{
     extract,
-    response::{self, IntoResponse, NoContent, StatusCode},
+    response::{self, IntoResponse, StatusCode},
     routing::{get, post},
 };
 
@@ -79,10 +77,9 @@ async fn set_auto_calibrate<'a>(
     let mut rgb_multi_recv = RGB_MULTIPLIERS_WATCH.anon_receiver();
     let changed_fut = async {
         loop {
-            match rgb_multi_recv.try_changed() {
-                Some(d) => return d,
-                None => (),
-            };
+            if let Some(d) = rgb_multi_recv.try_changed() {
+                return d;
+            }
             Timer::after_millis(50).await
         }
     };
