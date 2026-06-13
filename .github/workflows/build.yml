@@ -108,8 +108,8 @@ jobs:
         ################
       - name: Upload file
         run: |
-          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free_${{ env.sha_short }}.bin
-          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free_latest.bin
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest.bin
       - uses: actions/upload-artifact@v4
         with:
           name: firmware
