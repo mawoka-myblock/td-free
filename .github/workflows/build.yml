@@ -12,10 +12,6 @@ permissions:
 
 jobs:
   compile:
-    # strategy:
-    #   fail-fast: true
-    # matrix:
-    #   debug_enabled: [true, false]
     name: Compile
     runs-on: ubuntu-latest
 
@@ -100,7 +96,6 @@ jobs:
         env:
           BRANCH: ${{ env.branch }}
           SHA_SHORT: $${{ env.sha_short }}
-
       - name: Merge Binary
         run: espflash save-image --merge --chip esp32c3 target/riscv32imc-unknown-none-elf/release/firmware td-free.bin
         ################
@@ -110,6 +105,28 @@ jobs:
         run: |
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware
+          path: td-free.bin
+
+      - name: Build | Compile (debug)
+        run: |
+          export VERSION=${BRANCH}@${SHA_SHORT}
+          export DEFMT_LOG=error
+          cargo build -p firmware --release
+        env:
+          BRANCH: ${{ env.branch }}
+          SHA_SHORT: $${{ env.sha_short }}
+      - name: Merge Binary
+        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-unknown-none-elf/release/firmware td-free.bin
+        ################
+        # UPLOAD ARTIFACT
+        ################
+      - name: Upload file
+        run: |
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-${{ env.sha_short }}_debug.bin
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest_debug.bin
       - uses: actions/upload-artifact@v4
         with:
           name: firmware
