@@ -132,5 +132,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: firmware_debug
-          path: td-free.bin
+          path: td-free_debug.bin
           archive: false
