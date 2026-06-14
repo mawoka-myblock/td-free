@@ -24,11 +24,11 @@ jobs:
       ################
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
         with:
           version: 11
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: pnpm
@@ -105,7 +105,7 @@ jobs:
         run: |
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-${{ env.sha_short }}.bin
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: firmware
           path: td-free.bin
@@ -129,7 +129,7 @@ jobs:
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest_debug.bin
       - name: Rename file
         run: mv td-free.bin td-free_debug.bin
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: firmware_debug
           path: td-free_debug.bin
