@@ -11,8 +11,8 @@ use heapless::String;
 use veml7700::Veml7700;
 
 use crate::{
-    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, DEVICE_STATE, DeviceState, MEASUREMENT_DATA_WATCH,
-    MeasurementData, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
+    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH, MEASUREMENT_STATE,
+    MeasurementData, MeasurementState, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
     helpers::{
         calibration::auto_calibrate_gray_reference,
         median_buffer::RunningMedianBuffer,
@@ -37,8 +37,8 @@ pub async fn sensor_task(
     _scl_v33: peripherals::GPIO10<'static>,
     _i2c_per: peripherals::I2C0<'static>,
 ) {
-    let dev_state_sender = DEVICE_STATE.sender();
-    dev_state_sender.send(DeviceState::Warmup);
+    let dev_state_sender = MEASUREMENT_STATE.sender();
+    dev_state_sender.send(MeasurementState::Warmup);
 
     let mut v77 = get_v77();
     v77.enable().unwrap();
@@ -82,6 +82,7 @@ pub async fn sensor_task(
     let mut calib_sub = unwrap!(CALIBRATE_REF_CHANNEL.subscriber());
 
     let mm_data_pub = MEASUREMENT_DATA_WATCH.sender();
+    dev_state_sender.send(MeasurementState::Idle);
 
     loop {
         if !client_connected_sub.get().await {
@@ -103,8 +104,8 @@ pub async fn sensor_task(
                 buf2.clear();
             }
             dev_state_sender.send_if_modified(|v| {
-                let changed = *v != Some(DeviceState::Idle);
-                *v = Some(DeviceState::Idle);
+                let changed = *v != Some(MeasurementState::Idle);
+                *v = Some(MeasurementState::Idle);
                 changed
             });
             mm_data_pub.send_if_modified(|v| {
@@ -118,9 +119,9 @@ pub async fn sensor_task(
 
         // Filament detected
         info!("Filament detected");
-        dev_state_sender.send_if_modified(|v: &mut Option<DeviceState>| {
-            let changed = *v != Some(DeviceState::FilamentInserted);
-            *v = Some(DeviceState::FilamentInserted);
+        dev_state_sender.send_if_modified(|v| {
+            let changed = *v != Some(MeasurementState::FilamentInserted);
+            *v = Some(MeasurementState::FilamentInserted);
             changed
         });
 

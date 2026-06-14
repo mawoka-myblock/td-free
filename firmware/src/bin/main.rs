@@ -104,6 +104,9 @@ async fn main(spawner: Spawner) -> ! {
     );
     let (iface, net_config, wifi_controller) = if let Some(wf_creds) = wifi_creds.clone() {
         info!("Found wifi creds, trying to connect");
+        firmware::WIFI_STATE
+            .sender()
+            .send(firmware::WifiState::Connecting);
         let sta_config = esp_radio::wifi::Config::Station(
             StationConfig::default()
                 .with_ssid(wf_creds.ssid.as_str())
@@ -126,7 +129,7 @@ async fn main(spawner: Spawner) -> ! {
         let mut dhcp_cfg = embassy_net::DhcpConfig::default();
 
         let mut hostname = heapless::String::new();
-        hostname.push_str("td-free.local").unwrap();
+        hostname.push_str("td-free").unwrap();
         dhcp_cfg.hostname = Some(hostname);
         (
             interfaces.station,
@@ -149,7 +152,9 @@ async fn main(spawner: Spawner) -> ! {
             dns_servers: Default::default(),
             gateway: Some(embassy_net::Ipv4Address::new(10, 10, 10, 1)),
         };
-
+        firmware::WIFI_STATE
+            .sender()
+            .send(firmware::WifiState::HotSpotRunning);
         (
             interfaces.access_point,
             embassy_net::Config::ipv4_static(ipv4_cfg),
@@ -188,6 +193,9 @@ async fn main(spawner: Spawner) -> ! {
                 software_reset()
             }
         }
+        firmware::WIFI_STATE
+            .sender()
+            .send(firmware::WifiState::Connected);
     } else {
         spawner.spawn(
             tasks::http::network::listen_for_connect_event_wifi_ap(wifi_controller).unwrap(),

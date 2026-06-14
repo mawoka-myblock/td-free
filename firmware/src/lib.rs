@@ -31,16 +31,25 @@ macro_rules! mk_static {
     }};
 }
 
-pub static CLIENT_CONNECTED: Watch<CriticalSectionRawMutex, bool, 1> = Watch::new();
+pub static CLIENT_CONNECTED: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
 
-pub static DEVICE_STATE: Watch<CriticalSectionRawMutex, DeviceState, 1> = Watch::new();
+pub static MEASUREMENT_STATE: Watch<CriticalSectionRawMutex, MeasurementState, 1> = Watch::new();
 
 #[derive(Debug, Clone, Copy, Format, PartialEq, Eq, PartialOrd, Ord)]
-pub enum DeviceState {
+pub enum MeasurementState {
     Warmup,
     FilamentInserted,
     Idle,
 }
+
+#[derive(Debug, Clone, Copy, Format, PartialEq, Eq, PartialOrd, Ord)]
+pub enum WifiState {
+    HotSpotRunning,
+    Connecting,
+    Connected,
+}
+
+pub static WIFI_STATE: Watch<CriticalSectionRawMutex, WifiState, 1> = Watch::new();
 
 #[derive(Debug, Clone, Format, PartialEq, PartialOrd, Default, Serialize)]
 pub struct MeasurementData {

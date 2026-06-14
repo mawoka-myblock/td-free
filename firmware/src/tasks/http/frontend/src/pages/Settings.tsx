@@ -122,10 +122,11 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 						type="number"
 						min={0}
 						max={100}
+						step={1}
 						value={settings.led_brightness}
 						onInput={(e) =>
 							updateField(
-								[],
+								["led_brightness"],
 								Number((e.target as HTMLInputElement).value),
 							)
 						}
