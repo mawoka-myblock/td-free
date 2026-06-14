@@ -68,7 +68,7 @@ where
     serializer.serialize_str(&s)
 }
 
-pub static MEASUREMENT_DATA_WATCH: Watch<CriticalSectionRawMutex, Option<MeasurementData>, 2> =
+pub static MEASUREMENT_DATA_WATCH: Watch<CriticalSectionRawMutex, Option<MeasurementData>, 3> =
     Watch::new();
 
 pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Watch::new();

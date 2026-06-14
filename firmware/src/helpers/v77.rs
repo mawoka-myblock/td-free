@@ -71,6 +71,7 @@ pub async fn is_filament_inserted<'d>(
 ) -> (bool, f32) {
     let mut detection_readings: Vec<f32, 3> = Vec::new();
     set_led_brightness(25);
+    Timer::after_millis(150).await;
     for i in 0..3 {
         let current_reading = {
             match veml.read_lux() {

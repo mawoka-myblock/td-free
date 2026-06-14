@@ -17,9 +17,12 @@ use embassy_net::StaticConfigV4;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
+use esp_hal::Async;
 use esp_hal::clock::CpuClock;
 use esp_hal::system::software_reset;
 use esp_hal::timer::timg::TimerGroup;
+use esp_hal::uart::Uart;
+use esp_hal::usb_serial_jtag::UsbSerialJtag;
 use esp_println as _;
 use esp_radio::wifi::ControllerConfig;
 use esp_radio::wifi::ap::AccessPointConfig;
@@ -102,6 +105,12 @@ async fn main(spawner: Spawner) -> ! {
         )
         .unwrap(),
     );
+
+    let (rx, tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
+        .into_async()
+        .split();
+    spawner.spawn(tasks::serial::handle_serial_task(tx, rx).unwrap());
+
     let (iface, net_config, wifi_controller) = if let Some(wf_creds) = wifi_creds.clone() {
         info!("Found wifi creds, trying to connect");
         firmware::WIFI_STATE
