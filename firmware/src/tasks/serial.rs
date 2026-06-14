@@ -76,7 +76,7 @@ pub async fn handle_serial_task(
 }
 
 /// Formats a usize into a decimal ASCII byte slice using a caller-provided buffer.
-fn format_usize<'a>(mut n: usize, buf: &'a mut [u8; 20]) -> &'a [u8] {
+fn format_usize(mut n: usize, buf: &mut [u8; 20]) -> &[u8] {
     if n == 0 {
         buf[19] = b'0';
         return &buf[19..];
