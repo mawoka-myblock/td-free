@@ -39,12 +39,12 @@ esp-backtrace = { version = "0.19.0", features = [
 ] }
 esp-println = { version = "0.17.0", features = ["defmt-espflash", "esp32c3"] }
 # for more networking protocol support see https://crates.io/crates/edge-net
-bt-hci = "0.8.0"
+# bt-hci = "0.8.0"
 embassy-executor = { version = "0.10.0", features = ["defmt"] }
 embassy-time = { version = "0.5.0", features = ["defmt"] }
 esp-radio = { version = "0.18.0", features = [
-  "ble",
-  "coex",
+  # "ble",
+  # "coex",
   "defmt",
   "esp-alloc",
   "esp32c3",
@@ -65,7 +65,7 @@ smoltcp = { version = "0.13.0", default-features = false, features = [
   "socket-udp",
 
 ] }
-trouble-host = { version = "0.6.0", features = ["gatt"] }
+# trouble-host = { version = "0.6.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
 static_cell      = { version = "2.1.1", features = ["nightly"] }
