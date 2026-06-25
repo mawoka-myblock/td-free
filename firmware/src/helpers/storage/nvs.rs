@@ -81,18 +81,7 @@ impl Nvs {
                     "Unsupported version while appending flash key... Wiping NVS partition!"
                 );
 
-                let mut flash = esp_storage::FlashStorage::new(unsafe {
-                    self.flash_peripheral.clone_unchecked()
-                });
-                let mut written = 0;
-
-                while written < self.size {
-                    let chunk = [0; 1024];
-                    let chunk_size = (self.size - written).min(1024);
-
-                    _ = flash.write((self.offset + written) as u32, &chunk[..chunk_size]);
-                    written += chunk_size;
-                }
+                self.wipe_partition();
 
                 self.tickv.initialise(hash(tickv::MAIN_KEY))?;
                 self.tickv.append_key(hash(key), buf)?;
@@ -101,6 +90,19 @@ impl Nvs {
         }
 
         Ok(())
+    }
+
+    fn wipe_partition(&self) {
+        let mut flash =
+            esp_storage::FlashStorage::new(unsafe { self.flash_peripheral.clone_unchecked() });
+        let mut address = self.offset as u32;
+        let end = address + self.size as u32;
+
+        while address < end {
+            let next = (address + 1024).min(end);
+            _ = embedded_storage::nor_flash::NorFlash::erase(&mut flash, address, next);
+            address = next;
+        }
     }
 
     pub async fn invalidate_key(&self, key: &[u8]) -> anyhow::Result<(), ErrorCode> {
@@ -136,17 +138,7 @@ impl Nvs {
         {
             defmt::error!("Unsupported version while appending flash key... Wiping NVS partition!");
 
-            let mut flash =
-                esp_storage::FlashStorage::new(unsafe { self.flash_peripheral.clone_unchecked() });
-            let mut written = 0;
-
-            while written < self.size {
-                let chunk = [0; 1024];
-                let chunk_size = (self.size - written).min(1024);
-
-                _ = flash.write((self.offset + written) as u32, &chunk[..chunk_size]);
-                written += chunk_size;
-            }
+            self.wipe_partition();
 
             self.tickv.initialise(hash(tickv::MAIN_KEY))?;
             self.tickv.append_key(hash(key), buf)?;
@@ -226,11 +218,8 @@ impl FlashController<1024> for NvsFlash {
 
     fn erase_region(&self, region_number: usize) -> Result<(), tickv::ErrorCode> {
         if let Ok(mut flash) = self.flash.try_lock() {
-            flash
-                .write(
-                    self.flash_offset + (region_number as u32 * 1024),
-                    &[0xFF; 1024],
-                )
+            let offset = self.flash_offset + (region_number as u32 * 1024);
+            embedded_storage::nor_flash::NorFlash::erase(&mut *flash, offset, offset + 1024)
                 .map_err(|_| tickv::ErrorCode::EraseFail)
         } else {
             Err(tickv::ErrorCode::EraseFail)

@@ -19,14 +19,15 @@ impl response::sse::EventSource for Events {
         self,
         mut writer: response::sse::EventWriter<'_, W>,
     ) -> Result<(), W::Error> {
-        // Create a guard that will set CLIENT_CONNECTED to false when dropped
+        // Create a guard that will decrement CLIENT_CONNECTED when dropped
         struct ClientConnectedGuard;
         impl Drop for ClientConnectedGuard {
             fn drop(&mut self) {
                 info!("Client disconnected!");
                 CLIENT_CONNECTED.sender().send_if_modified(|v| {
-                    let changed = *v != Some(false);
-                    *v = Some(false);
+                    let new = v.unwrap_or(1).saturating_sub(1);
+                    let changed = *v != Some(new);
+                    *v = Some(new);
                     changed
                 });
             }
@@ -38,10 +39,11 @@ impl response::sse::EventSource for Events {
             .receiver()
             .expect("Couldn't get a new receiver for measurement data");
 
-        // Set client connected to true on connection
+        // Increment client count on connection
         CLIENT_CONNECTED.sender().send_if_modified(|v| {
-            let changed = *v != Some(true);
-            *v = Some(true);
+            let new = v.unwrap_or(0).saturating_add(1);
+            let changed = *v != Some(new);
+            *v = Some(new);
             changed
         });
 

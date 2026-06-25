@@ -9,8 +9,8 @@ use picoserve::{
 };
 
 use crate::{
-    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, DATA_UPDATE_CHANNEL, DEVICE_INFO_WATCH,
-    RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
+    CALIBRATE_REF_CHANNEL, CALIBRATE_RESULT_CHANNEL, CLIENT_CONNECTED, DATA_UPDATE_CHANNEL,
+    DEVICE_INFO_WATCH, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
     helpers::{
         RGBMultipliers,
         calibration::CalibrationCommand,
@@ -65,30 +65,33 @@ async fn get_device_info() -> impl IntoResponse {
 async fn set_auto_calibrate<'a>(
     extract::Json(calib_d): extract::Json<CalibrationCommand>,
 ) -> Result<response::Json<RGBMultipliers>, (StatusCode, &'a str)> {
-    let client_connected = CLIENT_CONNECTED.try_get().unwrap_or(false);
-    if !client_connected {
+    let client_connected = CLIENT_CONNECTED.try_get().unwrap_or(0);
+    if client_connected == 0 {
         return Err((
             StatusCode::PRECONDITION_REQUIRED,
             "client needs to be listening and connected",
         ));
     }
 
+    let mut result_sub = CALIBRATE_RESULT_CHANNEL
+        .subscriber()
+        .map_err(|_| (StatusCode::SERVICE_UNAVAILABLE, "calibration already in progress"))?;
+
     CALIBRATE_REF_CHANNEL.publish_immediate(calib_d);
-    let mut rgb_multi_recv = RGB_MULTIPLIERS_WATCH.anon_receiver();
-    let changed_fut = async {
+
+    let result_fut = async {
         loop {
-            if let Some(d) = rgb_multi_recv.try_changed() {
-                return d;
+            if let Some(result) = result_sub.try_next_message_pure() {
+                return result;
             }
-            Timer::after_millis(50).await
+            Timer::after_millis(50).await;
         }
     };
     let timeout_fut = Timer::after_secs(5);
-    return match select(changed_fut, timeout_fut).await {
-        Either::First(d) => Ok(response::Json(d)),
-        Either::Second(_) => {
-            // timeout occurred
-            Err((StatusCode::REQUEST_TIMEOUT, "fn timeouted"))
-        }
-    };
+
+    match select(result_fut, timeout_fut).await {
+        Either::First(Some(d)) => Ok(response::Json(d)),
+        Either::First(None) => Err((StatusCode::INTERNAL_SERVER_ERROR, "calibration failed")),
+        Either::Second(_) => Err((StatusCode::REQUEST_TIMEOUT, "fn timeouted")),
+    }
 }

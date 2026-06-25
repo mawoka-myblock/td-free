@@ -11,11 +11,12 @@ use heapless::String;
 use veml7700::Veml7700;
 
 use crate::{
-    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH, MEASUREMENT_STATE,
-    MeasurementData, MeasurementState, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
+    CALIBRATE_REF_CHANNEL, CALIBRATE_RESULT_CHANNEL, CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH,
+    MEASUREMENT_STATE, MeasurementData, MeasurementState, RGB_MULTIPLIERS_WATCH,
+    SETTINGS_DATA_WATCH,
     helpers::{
         calibration::auto_calibrate_gray_reference,
-        median_buffer::RunningMedianBuffer,
+        median_buffer::{RunningMedianBuffer, RunningMedianBufferU16},
         v33::{
             apply_rgb_multipliers, apply_spectral_response_correction,
             spectral_correction_from_rgb, take_rgb_white_balance_calibration,
@@ -54,11 +55,24 @@ pub async fn sensor_task(
 
     drop(v77);
     let mut rgb_white_balance: Option<(u16, u16, u16)> = None;
-    let mut rgb_bufs: Option<(
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-    )> = None;
+    let rgb_bufs: &'static mut Option<
+        (
+            RunningMedianBufferU16<100>,
+            RunningMedianBufferU16<100>,
+            RunningMedianBufferU16<100>,
+        ),
+    > = crate::mk_static!(
+        Option<(
+            RunningMedianBufferU16<100>,
+            RunningMedianBufferU16<100>,
+            RunningMedianBufferU16<100>,
+        )>,
+        Some((
+            RunningMedianBufferU16::new(),
+            RunningMedianBufferU16::new(),
+            RunningMedianBufferU16::new(),
+        ))
+    );
 
     let mut v33 = get_v33();
     let has_color = v33.enable().is_ok();
@@ -67,14 +81,10 @@ pub async fn sensor_task(
     if has_color {
         Timer::after_millis(5).await;
         rgb_white_balance = Some(take_rgb_white_balance_calibration(&mut v33).await);
-        rgb_bufs = Some((
-            RunningMedianBuffer::new(),
-            RunningMedianBuffer::new(),
-            RunningMedianBuffer::new(),
-        ));
     }
 
-    let mut lux_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let lux_buf: &'static mut RunningMedianBuffer<100> =
+        crate::mk_static!(RunningMedianBuffer<100>, RunningMedianBuffer::new());
 
     let mut client_connected_sub = unwrap!(CLIENT_CONNECTED.receiver());
     let mut rgb_multi_sub = RGB_MULTIPLIERS_WATCH.anon_receiver();
@@ -85,20 +95,20 @@ pub async fn sensor_task(
     dev_state_sender.send(MeasurementState::Idle);
 
     loop {
-        if !client_connected_sub.get().await {
+        if client_connected_sub.get().await == 0 {
             set_led_brightness(0);
             client_connected_sub.changed().await;
         }
         let saved_algorithm = settings_sub.try_get().expect("No Settings available").algo;
 
-        let (is_filament_inserted, _) = {
-            let mut v77 = get_v77();
-            is_filament_inserted(&mut v77, v77_baseline_dark, saved_algorithm.threshold).await
-        };
+        let mut v77 = get_v77();
+        let (filament_inserted, _) =
+            is_filament_inserted(&mut v77, v77_baseline_dark, saved_algorithm.threshold).await;
 
-        if !is_filament_inserted {
+        if !filament_inserted {
+            drop(v77);
             lux_buf.clear();
-            if let Some((buf0, buf1, buf2)) = &mut rgb_bufs {
+            if let Some((buf0, buf1, buf2)) = rgb_bufs.as_mut() {
                 buf0.clear();
                 buf1.clear();
                 buf2.clear();
@@ -131,19 +141,22 @@ pub async fn sensor_task(
         let readings_per_call = 3;
 
         for i in 0..readings_per_call {
-            // Longer delay to ensure fresh VEML7700 readings
             if i > 0 {
-                Timer::after_millis(100).await; // Increased from 15ms to 60ms
+                Timer::after_millis(100).await;
             }
 
-            {
-                let mut v77 = get_v77();
-                let lux_reading = v77.read_lux().unwrap_or(0.0);
-                debug!("Raw lux: {}", lux_reading);
-                lux_buf.push(lux_reading);
-            }
-            if has_color {
-                let mut v33 = get_v33();
+            let lux_reading = v77.read_lux().unwrap_or(0.0);
+            debug!("Raw lux: {}", lux_reading);
+            lux_buf.push(lux_reading);
+        }
+        drop(v77);
+
+        if has_color {
+            let mut v33 = get_v33();
+            for i in 0..readings_per_call {
+                if i > 0 {
+                    Timer::after_millis(100).await;
+                }
                 if let (Ok(r), Ok(g), Ok(b), Ok(c)) = (
                     v33.read_red(),
                     v33.read_green(),
@@ -153,15 +166,15 @@ pub async fn sensor_task(
                     debug!("RGB readings {}: R={}, G={}, B={}, C={}", i + 1, r, g, b, c);
 
                     let buffers = rgb_bufs.as_mut().unwrap();
-                    buffers.0.push(r as f32);
-                    buffers.1.push(g as f32);
-                    buffers.2.push(b as f32);
+                    buffers.0.push(r);
+                    buffers.1.push(g);
+                    buffers.2.push(b);
                 }
             }
         }
         let buffer_count = lux_buf.len();
 
-        let final_median_lux = lux_buf.median().unwrap();
+        let final_median_lux = lux_buf.median().unwrap_or(0.0);
 
         if !has_color {
             let td_value = (final_median_lux / v77_baseline_bright) * 10.0;
@@ -171,11 +184,13 @@ pub async fn sensor_task(
                 buf_count: Some(buffer_count as u32),
                 hex_color: None,
             }));
+            continue;
         }
+
         let rgb_multipliers = rgb_multi_sub
             .try_get()
             .expect("No RGB Multipliers available");
-        let rgb_wb = rgb_white_balance.unwrap();
+        let rgb_wb = rgb_white_balance.expect("Color sensor present but no white balance");
 
         if let Some(cmd) = calib_sub.try_next_message_pure() {
             info!("Calibration requested");
@@ -192,9 +207,17 @@ pub async fn sensor_task(
             match result {
                 Ok(cal) => {
                     RGB_MULTIPLIERS_WATCH.sender().send(cal);
+                    CALIBRATE_RESULT_CHANNEL
+                        .publisher()
+                        .expect("calibration result publisher")
+                        .publish_immediate(Some(cal));
                 }
                 Err(e) => {
                     info!("Calibration failed: {:?}", Debug2Format(&e));
+                    CALIBRATE_RESULT_CHANNEL
+                        .publisher()
+                        .expect("calibration result publisher")
+                        .publish_immediate(None);
                 }
             }
         }
@@ -203,9 +226,9 @@ pub async fn sensor_task(
         let (r_median_raw, g_median_raw, b_median_raw) = {
             let buffers = rgb_bufs.as_mut().unwrap();
             (
-                buffers.0.median().unwrap_or(rgb_wb.0 as f32) as u16,
-                buffers.1.median().unwrap_or(rgb_wb.1 as f32) as u16,
-                buffers.2.median().unwrap_or(rgb_wb.2 as f32) as u16,
+                buffers.0.median().unwrap_or(rgb_wb.0),
+                buffers.1.median().unwrap_or(rgb_wb.1),
+                buffers.2.median().unwrap_or(rgb_wb.2),
             )
         };
 

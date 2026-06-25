@@ -80,7 +80,7 @@ async fn main(spawner: Spawner) -> ! {
     // let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
     //     HostResources::new();
     // let _stack = trouble_host::new(ble_controller, &mut resources);
-    CLIENT_CONNECTED.sender().send(false);
+    CLIENT_CONNECTED.sender().send(0);
 
     let nvs: &'static NvsMutex = firmware::mk_static!(
         NvsMutex,

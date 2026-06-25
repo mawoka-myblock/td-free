@@ -46,9 +46,10 @@ pub async fn rgb_led_task(rmt_per: RMT<'static>, p4: GPIO4<'static>) {
     let mut measurement = measurement_sub.get().await;
     let mut wifi = wifi_sub.get().await;
     let mut client = client_sub.get().await;
+    let initial_brightness_val = (brightness_pct as u32 * 255 / 100) as u8;
     led.write(brightness(
         [RGB8::new(255, 255, 0)].into_iter(),
-        brightness_pct,
+        initial_brightness_val,
     ))
     .await
     .unwrap();
@@ -56,7 +57,7 @@ pub async fn rgb_led_task(rmt_per: RMT<'static>, p4: GPIO4<'static>) {
     info!("Now in loop");
     loop {
         info!("Update!, Brightness: {}", brightness_pct);
-        let color = resolve_color(wifi, measurement, client);
+        let color = resolve_color(wifi, measurement, client > 0);
         let brightness_val = (brightness_pct as u32 * 255 / 100) as u8;
         info!("Setting led: R: {} G: {}, B: {}", color.r, color.g, color.b);
         led.write(gamma(brightness([color].into_iter(), brightness_val)))

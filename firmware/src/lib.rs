@@ -31,7 +31,7 @@ macro_rules! mk_static {
     }};
 }
 
-pub static CLIENT_CONNECTED: Watch<CriticalSectionRawMutex, bool, 2> = Watch::new();
+pub static CLIENT_CONNECTED: Watch<CriticalSectionRawMutex, u8, 2> = Watch::new();
 
 pub static MEASUREMENT_STATE: Watch<CriticalSectionRawMutex, MeasurementState, 1> = Watch::new();
 
@@ -63,8 +63,8 @@ fn serialize_td<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
-    let mut s: String<4> = String::new();
-    write!(&mut s, "{:.1}", value).unwrap();
+    let mut s: String<8> = String::new();
+    write!(&mut s, "{value:.1}").unwrap();
     serializer.serialize_str(&s)
 }
 
@@ -100,6 +100,14 @@ pub static DEVICE_INFO_WATCH: Watch<CriticalSectionRawMutex, DeviceInfo, 1> = Wa
 pub static CALIBRATE_REF_CHANNEL: PubSubChannel<
     CriticalSectionRawMutex,
     CalibrationCommand,
+    2,
+    1,
+    1,
+> = PubSubChannel::new();
+
+pub static CALIBRATE_RESULT_CHANNEL: PubSubChannel<
+    CriticalSectionRawMutex,
+    Option<RGBMultipliers>,
     2,
     1,
     1,

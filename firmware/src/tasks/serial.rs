@@ -1,11 +1,30 @@
 use embassy_time::Timer;
 use embedded_io_async::{Read, Write};
+use micromath::F32Ext;
 use esp_hal::{
     Async,
     usb_serial_jtag::{UsbSerialJtagRx, UsbSerialJtagTx},
 };
 
 use crate::{CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH};
+
+fn increment_client_count() {
+    CLIENT_CONNECTED.sender().send_if_modified(|v| {
+        let new = v.unwrap_or(0).saturating_add(1);
+        let changed = *v != Some(new);
+        *v = Some(new);
+        changed
+    });
+}
+
+fn decrement_client_count() {
+    CLIENT_CONNECTED.sender().send_if_modified(|v| {
+        let new = v.unwrap_or(1).saturating_sub(1);
+        let changed = *v != Some(new);
+        *v = Some(new);
+        changed
+    });
+}
 
 #[embassy_executor::task]
 pub async fn handle_serial_task(
@@ -54,25 +73,24 @@ pub async fn handle_serial_task(
             Err(_) => continue,
         }
     }
-    CLIENT_CONNECTED.sender().send(true);
+    increment_client_count();
 
     // Client is connected and measurement triggered — start streaming CSV
     loop {
-        let data = match mm_data_sub.get().await {
-            Some(d) => d,
-            None => {
-                Timer::after_millis(200).await;
-                continue;
-            }
+        let Some(data) = mm_data_sub.get().await else {
+            Timer::after_millis(200).await;
+            continue;
         };
 
         let mut line_buf = [0u8; 64];
         let line = format_csv_line(data.td, data.hex_color.as_deref(), &mut line_buf);
-        tx.write_all(line).await.ok();
-        tx.flush().await.ok();
+        if tx.write_all(line).await.is_err() || tx.flush().await.is_err() {
+            break;
+        }
 
         embassy_time::Timer::after_millis(100).await;
     }
+    decrement_client_count();
 }
 
 /// Formats a usize into a decimal ASCII byte slice using a caller-provided buffer.
@@ -99,8 +117,8 @@ fn format_csv_line<'a>(td: f32, color: Option<&str>, buf: &'a mut [u8; 64]) -> &
     let mut pos = prefix.len();
 
     // Write TD float (simple fixed-point: integer.fraction)
-    let td_int = td as i32;
-    let td_frac = ((td - td_int as f32).abs() * 100.0) as u32;
+    let td_int = td.trunc() as i32;
+    let td_frac = ((td - td.trunc()).abs() * 100.0).round() as u32 % 100;
 
     let mut tmp = [0u8; 20];
     let int_str = format_usize(td_int.unsigned_abs() as usize, &mut tmp);

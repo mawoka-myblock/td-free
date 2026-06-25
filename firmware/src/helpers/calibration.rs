@@ -3,7 +3,7 @@ use heapless::Vec;
 use micromath::F32Ext;
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::{RGBMultipliers, median_buffer::RunningMedianBuffer};
+use crate::helpers::{RGBMultipliers, median_buffer::RunningMedianBufferU16};
 
 #[derive(Debug, Format, Clone, Copy, Deserialize, Serialize)]
 pub struct CalibrationCommand {
@@ -21,9 +21,9 @@ pub async fn auto_calibrate_gray_reference(
     command_data: CalibrationCommand,
     final_median_lux: f32,
     rgb_bufs: &(
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
+        RunningMedianBufferU16<100>,
+        RunningMedianBufferU16<100>,
+        RunningMedianBufferU16<100>,
     ),
     rgb_wb: (u16, u16, u16),
     mut rgb_multipliers: RGBMultipliers,
@@ -37,9 +37,9 @@ pub async fn auto_calibrate_gray_reference(
 
     // Take current RAW median reading from the buffers
     let (current_r, current_g, current_b) = (
-        rgb_bufs.0.median().unwrap_or(0.0),
-        rgb_bufs.1.median().unwrap_or(0.0),
-        rgb_bufs.2.median().unwrap_or(0.0),
+        rgb_bufs.0.median().unwrap_or(0) as f32,
+        rgb_bufs.1.median().unwrap_or(0) as f32,
+        rgb_bufs.2.median().unwrap_or(0) as f32,
     );
 
     if current_r == 0.0 && current_g == 0.0 && current_b == 0.0 {
