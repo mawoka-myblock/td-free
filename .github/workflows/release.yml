@@ -14,106 +14,128 @@ permissions:
 jobs:
   compile:
     name: Compile
-    strategy:
-      fail-fast: true
-      matrix:
-        debug_enabled: [true, false]
-    runs-on: ubuntu-22.04
-    env:
-      MINIO_BUCKET: ${{ secrets.MINIO_BUCKET }}
+    runs-on: ubuntu-latest
 
     steps:
-      - name: Setup | Rust
-        uses: dtolnay/rust-toolchain@master
+      - name: Setup | Checkout
+        uses: actions/checkout@v5
+
+      ################
+      # Frontend build
+      ################
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
         with:
-          toolchain: nightly-2025-06-28
-          components: rustfmt, clippy
-      - name: Install Rust for Xtensa
-        uses: esp-rs/xtensa-toolchain@v1.5
+          version: 11
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
         with:
-          default: true
-          version: "latest"
-          ldproxy: true
-      - name: Setup | Std
-        run: rustup component add rust-src --toolchain nightly-2025-06-28
-      - uses: Swatinem/rust-cache@v2
-      - name: Install Cargo-Binstall
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: firmware/src/tasks/http/frontend/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: firmware/src/tasks/http/frontend
+        run: pnpm ci --ignore-scripts
+      - name: Build frontend
+        working-directory: firmware/src/tasks/http/frontend
+        run: pnpm build
+
+      ################
+      # Rust Setup
+      ################
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+          target: riscv32imc-unknown-none-elf
+      - name: Install Cargo-Bininstall
         uses: cargo-bins/cargo-binstall@main
       - name: Install ESPflash
-        run: cargo binstall espflash@=3.3.0 --no-confirm --force
-      - name: Setup | Checkout
-        uses: actions/checkout@v4
+        run: cargo binstall espflash@=4.4.0 --no-confirm --force
+      - name: Enable caching
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: firmware
 
-      - name: Install MinIO Client
-        run: |
-          curl https://dl.min.io/client/mc/release/linux-amd64/mc --create-dirs -o $HOME/minio-binaries/mc
-          chmod +x $HOME/minio-binaries/mc
-      - name: Set MinIO Client Up
-        run: |
-          $HOME/minio-binaries/mc alias set deploy $MINIO_ENDPOINT $MINIO_ACCESS_KEY $MINIO_SECRET_KEY
-        env:
-          MINIO_ENDPOINT: ${{ secrets.MINIO_ENDPOINT }}
-          MINIO_ACCESS_KEY: ${{ secrets.MINIO_ACCESS_KEY }}
-          MINIO_SECRET_KEY: ${{ secrets.MINIO_SECRET_KEY }}
+      ################
+      # SETUP RCLONE
+      ################
 
-      - name: Extract version from tag
+      - name: Extract Data
         id: extract_version
         run: |
           # Remove the "v" prefix if present
           BASE_VERSION="${{ github.ref_name }}"
           VERSION=${BASE_VERSION#v}
           echo "version=$VERSION" >> $GITHUB_ENV
-      - name: Update version in Cargo.toml
+          echo "sha_short=$(git rev-parse --short "$GITHUB_SHA")" >> "$GITHUB_ENV"
+          echo "branch=$(echo ${GITHUB_REF#refs/heads/})" >> "$GITHUB_ENV"
+      - name: Install Rclone
+        run: curl https://rclone.org/install.sh | sudo bash
+      - name: Configure rclone
         run: |
-          sed -i "s/^version = \".*\"/version = \"$VERSION\"/" Cargo.toml
-        env:
-          VERSION: ${{ env.version }}
-      - name: Prepare Debug Config # Remove CONFIG_LOG_DEFAULT_LEVEL_NONE=y from sdkconfig.defaults
-        if: matrix.debug_enabled == true
-        run: |
-          if grep -q "CONFIG_LOG_DEFAULT_LEVEL_NONE=y" sdkconfig.defaults; then
-            sed -i '/CONFIG_LOG_DEFAULT_LEVEL_NONE=y/d' sdkconfig.defaults
-            echo "Removed CONFIG_LOG_DEFAULT_LEVEL_NONE=y from sdkconfig.defaults"
-          fi
+          mkdir -p ~/.config/rclone
 
-      # - name: Setup | ldproxy
-      #   run: cargo install ldproxy
+          cat > ~/.config/rclone/rclone.conf <<EOF
+          [garage]
+          type = s3
+          provider = Other
+          access_key_id = ${{ secrets.MINIO_ACCESS_KEY }}
+          secret_access_key = ${{ secrets.MINIO_SECRET_KEY }}
+          endpoint = ${{ secrets.MINIO_ENDPOINT }}
+          region = us-east-1
+          force_path_style = true
+          signature_v2 = True
+          EOF
+
       - name: Build | Compile (production)
         run: |
-          BASE_VERSION="${{ github.ref_name }}"
-          export VERSION=${BASE_VERSION#v}
-          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
-            export VERSION="${VERSION}_debug"
-          fi
-          cargo build --release
+          export VERSION=${BRANCH}@${SHA_SHORT}
+          cargo build -p firmware --release
         env:
-          VERSION: ${{ env.version }}
-
+          BRANCH: ${{ env.branch }}
+          SHA_SHORT: $${{ env.sha_short }}
       - name: Merge Binary
-        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-esp-espidf/release/td-free-rs td-free.bin
+        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-unknown-none-elf/release/firmware td-free.bin
+        ################
+        # UPLOAD ARTIFACT
+        ################
       - name: Upload file
         run: |
           BASE_VERSION="${{ github.ref_name }}"
           export VERSION=${BASE_VERSION#v}
-          if [ "${{ matrix.debug_enabled }}" = "true" ]; then
-            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-${VERSION}_debug.bin
-            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-latest_debug.bin
-          else
-            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-${VERSION}.bin
-            $HOME/minio-binaries/mc cp td-free.bin deploy/$MINIO_BUCKET/releases/td-free-latest.bin
-          fi
-      - name: Rename file to Debug
-        if: matrix.debug_enabled == true
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-${{ env.sha_short }}.bin
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-latest.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: firmware
+          path: td-free.bin
+
+      - name: Build | Compile (debug)
+        run: |
+          export VERSION=${BRANCH}@${SHA_SHORT}
+          export DEFMT_LOG=error
+          cargo build -p firmware --release
+        env:
+          BRANCH: ${{ env.branch }}
+          SHA_SHORT: $${{ env.sha_short }}
+      - name: Merge Binary
+        run: espflash save-image --merge --chip esp32c3 target/riscv32imc-unknown-none-elf/release/firmware td-free.bin
+        ################
+        # UPLOAD ARTIFACT
+        ################
+      - name: Upload file
+        run: |
+          BASE_VERSION="${{ github.ref_name }}"
+          export VERSION=${BASE_VERSION#v}
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-${{ env.sha_short }}_debug.bin
+          rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-latest_debug.bin
+      - name: Rename file
         run: mv td-free.bin td-free_debug.bin
-      - name: Release Prod
-        if: matrix.debug_enabled == false
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v7
         with:
-          append_body: true
-          files: td-free.bin
-      - name: Release Debug
-        if: matrix.debug_enabled == true
-        uses: softprops/action-gh-release@v2
-        with:
-          append_body: true
-          files: td-free_debug.bin
+          name: firmware_debug
+          path: td-free_debug.bin
+          archive: false
