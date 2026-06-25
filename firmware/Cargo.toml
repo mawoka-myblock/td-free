@@ -1,0 +1,118 @@
+[package]
+edition      = "2024"
+name         = "firmware"
+rust-version = "1.88"
+version      = "0.1.0"
+
+[[bin]]
+name = "firmware"
+path = "./src/bin/main.rs"
+
+[dependencies]
+esp-hal = { version = "~1.1.0", features = ["defmt", "esp32c3", "unstable"] }
+
+esp-rtos = { version = "0.3.0", features = [
+  "defmt",
+  "embassy",
+  "esp-alloc",
+  "esp-radio",
+  "esp32c3",
+] }
+
+defmt                  = "1.0.1"
+esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32c3"] }
+
+embassy-net = { version = "0.9.1", features = [
+  "defmt",
+  "dhcpv4",
+  "medium-ethernet",
+  "tcp",
+  "udp",
+] }
+embedded-io = { version = "0.7.1", features = ["defmt"] }
+embedded-io-async = { version = "0.7.0", features = ["defmt"] }
+esp-alloc = { version = "0.10.0", features = ["defmt"] }
+esp-backtrace = { version = "0.19.0", features = [
+  "defmt",
+  "esp32c3",
+  "panic-handler",
+] }
+esp-println = { version = "0.17.0", features = ["defmt-espflash", "esp32c3"] }
+# for more networking protocol support see https://crates.io/crates/edge-net
+# bt-hci = "0.8.0"
+embassy-executor = { version = "0.10.0", features = ["defmt"] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+esp-radio = { version = "0.18.0", features = [
+  # "ble",
+  # "coex",
+  "defmt",
+  "esp-alloc",
+  "esp32c3",
+  "unstable",
+  "wifi",
+] }
+smoltcp = { version = "0.13.0", default-features = false, features = [
+  "defmt",
+  "medium-ethernet",
+  "multicast",
+  "proto-dhcpv4",
+  "proto-dns",
+  "proto-ipv4",
+  "socket-dns",
+  "socket-icmp",
+  "socket-raw",
+  "socket-tcp",
+  "socket-udp",
+
+] }
+# trouble-host = { version = "0.6.0", features = ["gatt"] }
+
+critical-section = "1.2.0"
+static_cell      = { version = "2.1.1", features = ["nightly"] }
+
+esp-storage = { version  = "0.9", features = ["esp32c3"] }
+tickv = { version = "2" }
+embedded-storage = { version = "*" }
+anyhow = {version = "*", default-features = false}
+portable-atomic = { version = "1.13", default-features = false }
+
+
+smart-leds = "0.4"
+esp-hal-smartled = { git = "https://github.com/florianL21/esp-hal-community", features = ["defmt"], rev = "728d7f9" }
+
+embedded-hal = { version = "1", features = ["defmt-03"] }
+embedded-hal-async = { version = "1", features = ["defmt-03"] }
+
+veml7700 = { version = "0.3.2" }
+
+picoserve = { version = "0.18", features = ["embassy", "defmt", "json"] }
+serde = { version = "1", default-features = false, features = ["derive"] }
+serde-json-core = { version = "0.6" }
+heapless = { version = "*", features = ["serde"] }
+
+edge-dhcp = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-nal = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-nal-embassy = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+edge-captive = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
+
+embassy-sync = { version = "*", features = ["defmt"] }
+embassy-futures = { version = "*", features = ["defmt"] }
+
+micromath = { version = "*" }
+
+postcard = { version = "1.1" }
+
+thiserror = { version = "2", default-features = false }
+
+
+# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
+[profile.dev]
+# The default debug profile is too slow and too big for resource-constrained devices.
+# Always build with some optimizations enabled.
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1     # LLVM can perform better optimizations using a single thread
+debug         = 2     # prefer slower builds but better debugging experience
+lto           = 'fat'
+opt-level     = 's'
