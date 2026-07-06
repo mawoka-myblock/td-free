@@ -77,38 +77,13 @@
         }
       ],
       "drc_exclusions": [
-        [
-          "annular_width|62450000|50600000|68ed184f-f9e3-4250-894d-3f47dca835a1|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "lib_footprint_issues|22575000|23175000|eca92e77-bbc0-4a6d-bb30-262db05b8bff|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "lib_footprint_issues|91142500|23007500|6eb3cacd-deff-4613-a04e-94661402c23f|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "malformed_courtyard|53641900|41993601|7a7fea4b-e63a-4463-b6f6-d34fdf37e579|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "malformed_courtyard|53641900|43506401|7a7fea4b-e63a-4463-b6f6-d34fdf37e579|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "malformed_courtyard|56258100|41993601|7a7fea4b-e63a-4463-b6f6-d34fdf37e579|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "malformed_courtyard|56258100|43506401|7a7fea4b-e63a-4463-b6f6-d34fdf37e579|00000000-0000-0000-0000-000000000000",
-          ""
-        ],
-        [
-          "padstack|62450000|50600000|68ed184f-f9e3-4250-894d-3f47dca835a1|00000000-0000-0000-0000-000000000000",
-          ""
-        ]
+        "annular_width|156000000|45500000|22f81085-fe97-4480-bf5d-730f08f5d20b|00000000-0000-0000-0000-000000000000",
+        "lib_footprint_issues|116125000|18075000|f1950698-b0e6-4dd2-8c55-bf29196e27c5|00000000-0000-0000-0000-000000000000",
+        "malformed_courtyard|147191900|36893601|bb7cd085-d913-4bd1-a42b-c8010e3592c3|00000000-0000-0000-0000-000000000000",
+        "malformed_courtyard|147191900|38406401|bb7cd085-d913-4bd1-a42b-c8010e3592c3|00000000-0000-0000-0000-000000000000",
+        "malformed_courtyard|149808100|36893601|bb7cd085-d913-4bd1-a42b-c8010e3592c3|00000000-0000-0000-0000-000000000000",
+        "malformed_courtyard|149808100|38406401|bb7cd085-d913-4bd1-a42b-c8010e3592c3|00000000-0000-0000-0000-000000000000",
+        "padstack|156000000|45500000|22f81085-fe97-4480-bf5d-730f08f5d20b|00000000-0000-0000-0000-000000000000"
       ],
       "meta": {
         "version": 2
@@ -287,7 +262,7 @@
       "internal_id": "",
       "mfg": "",
       "mpn": "",
-      "sch_revision": "2"
+      "sch_revision": ""
     },
     "layer_pairs": [],
     "layer_presets": [],
@@ -306,242 +281,35 @@
   "cvpcb": {
     "equivalence_files": []
   },
-  "erc": {
-    "erc_exclusions": [],
-    "meta": {
-      "version": 0
-    },
-    "pin_map": [
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        2
-      ],
-      [
-        0,
-        2,
-        0,
-        1,
-        0,
-        0,
-        1,
-        0,
-        2,
-        2,
-        2,
-        2
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        1,
-        0,
-        1,
-        2
-      ],
-      [
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        1,
-        1,
-        2,
-        1,
-        1,
-        2
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        2
-      ],
-      [
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        2
-      ],
-      [
-        1,
-        1,
-        1,
-        1,
-        1,
-        0,
-        1,
-        1,
-        1,
-        1,
-        1,
-        2
-      ],
-      [
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        1,
-        0,
-        0,
-        0,
-        0,
-        2
-      ],
-      [
-        0,
-        2,
-        1,
-        2,
-        0,
-        0,
-        1,
-        0,
-        2,
-        2,
-        2,
-        2
-      ],
-      [
-        0,
-        2,
-        0,
-        1,
-        0,
-        0,
-        1,
-        0,
-        2,
-        0,
-        0,
-        2
-      ],
-      [
-        0,
-        2,
-        1,
-        1,
-        0,
-        0,
-        1,
-        0,
-        2,
-        0,
-        0,
-        2
-      ],
-      [
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2,
-        2
-      ]
-    ],
-    "rule_severities": {
-      "bus_definition_conflict": "error",
-      "bus_entry_needed": "error",
-      "bus_to_bus_conflict": "error",
-      "bus_to_net_conflict": "error",
-      "conflicting_netclasses": "error",
-      "different_unit_footprint": "error",
-      "different_unit_net": "error",
-      "duplicate_reference": "error",
-      "duplicate_sheet_names": "error",
-      "endpoint_off_grid": "warning",
-      "extra_units": "error",
-      "field_name_whitespace": "warning",
-      "footprint_filter": "ignore",
-      "footprint_link_issues": "warning",
-      "four_way_junction": "ignore",
-      "global_label_dangling": "warning",
-      "ground_pin_not_ground": "warning",
-      "hier_label_mismatch": "error",
-      "isolated_pin_label": "warning",
-      "label_dangling": "error",
-      "label_multiple_wires": "warning",
-      "lib_symbol_issues": "warning",
-      "lib_symbol_mismatch": "warning",
-      "missing_bidi_pin": "warning",
-      "missing_input_pin": "warning",
-      "missing_power_pin": "error",
-      "missing_unit": "warning",
-      "multiple_net_names": "warning",
-      "net_not_bus_member": "warning",
-      "no_connect_connected": "warning",
-      "no_connect_dangling": "warning",
-      "pin_not_connected": "error",
-      "pin_not_driven": "error",
-      "pin_to_pin": "warning",
-      "power_pin_not_driven": "error",
-      "same_local_global_label": "warning",
-      "similar_label_and_power": "warning",
-      "similar_labels": "warning",
-      "similar_power": "warning",
-      "simulation_model_issue": "ignore",
-      "single_global_label": "ignore",
-      "stacked_pin_name": "warning",
-      "unannotated": "error",
-      "unconnected_wire_endpoint": "warning",
-      "undefined_netclass": "error",
-      "unit_value_mismatch": "error",
-      "unresolved_variable": "error",
-      "wire_dangling": "error"
-    }
-  },
   "libraries": {
     "pinned_footprint_libs": [],
     "pinned_symbol_libs": []
   },
   "meta": {
-    "filename": "td-free.kicad_pro",
+    "filename": "main.kicad_pro",
     "version": 3
   },
   "net_settings": {
     "classes": [
+      {
+        "bus_width": 12,
+        "clearance": 0.15,
+        "diff_pair_gap": 0.25,
+        "diff_pair_via_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Default",
+        "pcb_color": "rgba(0, 0, 0, 0.000)",
+        "priority": 2147483647,
+        "schematic_color": "rgba(0, 0, 0, 0.000)",
+        "track_width": 0.2,
+        "tuning_profile": "",
+        "via_diameter": 0.6,
+        "via_drill": 0.3,
+        "wire_width": 6
+      },
       {
         "bus_width": 12,
         "clearance": 0.15,
@@ -566,146 +334,155 @@
       "version": 5
     },
     "net_colors": null,
-    "netclass_assignments": null,
-    "netclass_patterns": []
+    "netclass_assignments": {},
+    "netclass_patterns": [
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-D2+-Pad4)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-D2--Pad5)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO0{slash}ADC1_CH0{slash}XTAL_32K_P-Pad18)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J3-Pin_4)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO2{slash}ADC1_CH2-Pad16)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO1{slash}ADC1_CH1{slash}XTAL_32K_N-Pad17)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO3{slash}ADC1_CH3-Pad15)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/SCL2"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(D1-DOUT-Pad2)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/USB_D-"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad9)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "VBUS"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad7)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO21{slash}U0TXD-Pad12)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(LED1-DOUT-Pad4)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/SDA2"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J3-Pin_3)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO9-Pad8)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J3-Pin_1)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO20{slash}U0RXD-Pad11)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad6)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/SDA1"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(U1-EN{slash}CHIP_PU)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/MM_RGB"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "GND"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "+3V3"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/SCL1"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J2-CC1)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/USB_D+"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad10)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J2-CC2)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/RGB_DATA"
+      }
+    ]
   },
   "pcbnew": {
     "last_paths": {
-      "gencad": "td-free.cad",
       "idf": "",
       "netlist": "",
-      "plot": "/home/mawoka/Downloads/td-free-gerber/",
-      "pos_files": "",
+      "plot": "",
       "specctra_dsn": "",
-      "step": "td-free.step",
-      "svg": "",
-      "vrml": "td-free.wrl"
+      "vrml": ""
     },
     "page_layout_descr_file": ""
   },
   "schematic": {
-    "annotate_start_num": 0,
-    "annotation": {
-      "method": 0,
-      "sort_order": 0
-    },
-    "bom_export_filename": "",
-    "bom_fmt_presets": [],
-    "bom_fmt_settings": {
-      "field_delimiter": ",",
-      "keep_line_breaks": false,
-      "keep_tabs": false,
-      "name": "CSV",
-      "ref_delimiter": ",",
-      "ref_range_delimiter": "",
-      "string_delimiter": "\""
-    },
-    "bom_presets": [],
-    "bom_settings": {
-      "exclude_dnp": false,
-      "fields_ordered": [
-        {
-          "group_by": false,
-          "label": "Reference",
-          "name": "Reference",
-          "show": true
-        },
-        {
-          "group_by": true,
-          "label": "Value",
-          "name": "Value",
-          "show": true
-        },
-        {
-          "group_by": false,
-          "label": "Datasheet",
-          "name": "Datasheet",
-          "show": true
-        },
-        {
-          "group_by": false,
-          "label": "Footprint",
-          "name": "Footprint",
-          "show": true
-        },
-        {
-          "group_by": false,
-          "label": "Qty",
-          "name": "${QUANTITY}",
-          "show": true
-        },
-        {
-          "group_by": true,
-          "label": "DNP",
-          "name": "${DNP}",
-          "show": true
-        }
-      ],
-      "filter_string": "",
-      "group_symbols": true,
-      "include_excluded_from_bom": false,
-      "name": "Grouped By Value",
-      "sort_asc": true,
-      "sort_field": "Reference"
-    },
     "bus_aliases": {},
-    "connection_grid_size": 50.0,
-    "drawing": {
-      "dashed_lines_dash_length_ratio": 12.0,
-      "dashed_lines_gap_length_ratio": 3.0,
-      "default_line_thickness": 6.0,
-      "default_text_size": 50.0,
-      "field_names": [],
-      "hop_over_size_choice": 0,
-      "intersheets_ref_own_page": false,
-      "intersheets_ref_prefix": "",
-      "intersheets_ref_short": false,
-      "intersheets_ref_show": false,
-      "intersheets_ref_suffix": "",
-      "junction_size_choice": 3,
-      "label_size_ratio": 0.375,
-      "operating_point_overlay_i_precision": 3,
-      "operating_point_overlay_i_range": "~A",
-      "operating_point_overlay_v_precision": 3,
-      "operating_point_overlay_v_range": "~V",
-      "overbar_offset_ratio": 1.23,
-      "pin_symbol_size": 25.0,
-      "text_offset_ratio": 0.15
-    },
     "legacy_lib_dir": "",
     "legacy_lib_list": [],
-    "meta": {
-      "version": 1
-    },
-    "net_format_name": "",
-    "page_layout_descr_file": "",
-    "plot_directory": "",
-    "reuse_designators": true,
-    "space_save_all_events": true,
-    "spice_current_sheet_as_root": false,
-    "spice_external_command": "spice \"%I\"",
-    "spice_model_current_sheet_as_root": true,
-    "spice_save_all_currents": false,
-    "spice_save_all_dissipations": false,
-    "spice_save_all_voltages": false,
-    "subpart_first_id": 65,
-    "subpart_id_separator": 0,
-    "top_level_sheets": [
-      {
-        "filename": "td-free.kicad_sch",
-        "name": "td-free",
-        "uuid": "029a7aea-43c9-4f1d-af51-7a1360dad1ba"
-      }
-    ],
-    "used_designators": "J1,J3,#PWR2,#PWR26-27,LED1,C7,D3",
-    "variants": []
+    "top_level_sheets": []
   },
-  "sheets": [
-    [
-      "029a7aea-43c9-4f1d-af51-7a1360dad1ba",
-      "td-free"
-    ]
-  ],
+  "sheets": [],
   "text_variables": {},
   "tuning_profiles": {
     "meta": {
