@@ -10,11 +10,7 @@ use embassy_sync::{
 use heapless::String;
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::{
-    RGBMultipliers,
-    calibration::CalibrationCommand,
-    storage::{Settings, WifiCreds, nvs::Nvs},
-};
+use crate::helpers::storage::{Settings, WifiCreds, nvs::Nvs};
 
 extern crate alloc;
 
@@ -73,8 +69,6 @@ pub static MEASUREMENT_DATA_WATCH: Watch<CriticalSectionRawMutex, Option<Measure
 
 pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Watch::new();
 
-pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers, 1> = Watch::new();
-
 pub type NvsMutex = Mutex<CriticalSectionRawMutex, Nvs>;
 pub const NVS_OFFSET: usize = 0x9000;
 pub const NVS_SIZE: usize = 0x6000;
@@ -82,7 +76,6 @@ pub const NVS_SIZE: usize = 0x6000;
 #[derive(Debug, Format, Clone)]
 pub enum DataUpdate {
     Settings(Settings),
-    RgbMulti(RGBMultipliers),
     Wifi(WifiCreds),
 }
 
@@ -96,11 +89,3 @@ pub struct DeviceInfo {
 }
 
 pub static DEVICE_INFO_WATCH: Watch<CriticalSectionRawMutex, DeviceInfo, 1> = Watch::new();
-
-pub static CALIBRATE_REF_CHANNEL: PubSubChannel<
-    CriticalSectionRawMutex,
-    CalibrationCommand,
-    2,
-    1,
-    1,
-> = PubSubChannel::new();

@@ -592,6 +592,17 @@
 			(uuid "d86f33ce-cf10-4ed1-bcc0-0b9136ff37f2")
 		)
 		(embedded_fonts no)
+		(model "/home/mawoka/Documents/Kicad/easyeda2kicad/easyeda2kicad.3dshapes/Hanxia - 2x2 Header.step"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(footprint "Resistor_SMD:R_0805_2012Metric_Pad1.20x1.40mm_HandSolder"
 		(layer "F.Cu")
@@ -1316,6 +1327,17 @@
 				(xyz 0 0 0)
 			)
 		)
+		(model "${EASYEDA2KICAD}/easyeda2kicad.3dshapes/BULETM-SMD_ESPRESSIF_ESP32-C3-WROOM-02-N4-4MB.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 0)
+			)
+		)
 	)
 	(footprint "VEML7700_TR:XDCR_VEML7700-TT"
 		(layer "F.Cu")
@@ -1755,7 +1777,7 @@
 		(embedded_fonts no)
 		(model "${EASYEDA2KICAD}/easyeda2kicad.3dshapes/LED-SMD_4P-L6.8-W2.4_VEML7700-TR.wrl"
 			(offset
-				(xyz 0 0 0)
+				(xyz 0 0 0.95)
 			)
 			(scale
 				(xyz 1 1 1)
@@ -5778,15 +5800,15 @@
 			(uuid "686fef3d-d625-4e61-be71-af7e12930777")
 		)
 		(embedded_fonts no)
-		(model "${KICAD10_3DMODEL_DIR}/Connector_PinHeader_2.00mm.3dshapes/PinHeader_2x02_P2.00mm_Vertical_SMD.step"
+		(model "/home/mawoka/Documents/Kicad/easyeda2kicad/easyeda2kicad.3dshapes/HDR-SMD_4P-P2.00-V-F-R2-C2-LS6.4.step"
 			(offset
-				(xyz 0 0 0)
+				(xyz 0 0 0.3)
 			)
 			(scale
 				(xyz 1 1 1)
 			)
 			(rotate
-				(xyz 0 0 0)
+				(xyz -0 -0 -90)
 			)
 		)
 	)

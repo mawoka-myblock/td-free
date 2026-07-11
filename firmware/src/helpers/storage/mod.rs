@@ -4,8 +4,6 @@ use defmt::Format;
 pub use implementation::{NvsOpError, NvsStored};
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::RGBMultipliers;
-
 #[derive(Debug, Clone, Format, Serialize, Deserialize)]
 pub struct WifiCreds {
     pub ssid: heapless::String<32>,
@@ -31,15 +29,12 @@ impl Default for AlgoAdjustment {
 
 #[derive(Debug, Clone, Format, Serialize, Deserialize, Copy)]
 pub struct Settings {
-    /// in %
-    pub led_brightness: u8,
     pub algo: AlgoAdjustment,
 }
 
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            led_brightness: 100,
             algo: AlgoAdjustment::default(),
         }
     }
@@ -51,8 +46,4 @@ impl NvsStored for WifiCreds {
 
 impl NvsStored for Settings {
     const KEY: &'static [u8] = b"SET";
-}
-
-impl NvsStored for RGBMultipliers {
-    const KEY: &'static [u8] = b"RGB";
 }

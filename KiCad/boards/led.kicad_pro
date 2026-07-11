@@ -78,7 +78,7 @@
       ],
       "drc_exclusions": [
         [
-          "lib_footprint_issues|136125000|18075000|5c681490-5f0d-4680-9f44-357c170aaa1e|00000000-0000-0000-0000-000000000000",
+          "lib_footprint_issues|136125000|18075000|864a85d5-215a-4be9-b41a-b60e5f67af50|00000000-0000-0000-0000-000000000000",
           ""
         ]
       ],
@@ -316,23 +316,7 @@
     "netclass_patterns": [
       {
         "netclass": "Default",
-        "pattern": "GND"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "unconnected-(LED1-DOUT-Pad4)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "/USB_D+"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "unconnected-(U5-NC-Pad7)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "/RGB_DATA"
+        "pattern": "/SDA2"
       },
       {
         "netclass": "Default",
@@ -340,35 +324,11 @@
       },
       {
         "netclass": "Default",
-        "pattern": "/SDA1"
+        "pattern": "unconnected-(LED1-DOUT-Pad4)"
       },
       {
         "netclass": "Default",
-        "pattern": "unconnected-(U5-D2+-Pad4)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "slash"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "Net-(J2-CC2)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "unconnected-(U1-GPIO9-Pad8)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "unconnected-(U5-D2--Pad5)"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "/SDA2"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "Net-(J3-Pin_4)"
+        "pattern": "unconnected-(U5-NC-Pad7)"
       },
       {
         "netclass": "Default",
@@ -376,11 +336,23 @@
       },
       {
         "netclass": "Default",
-        "pattern": "+3V3"
+        "pattern": "/USB_D+"
       },
       {
         "netclass": "Default",
-        "pattern": "unconnected-(U5-NC-Pad6)"
+        "pattern": "Net-(J3-Pin_4)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "GND"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "slash"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/SDA1"
       },
       {
         "netclass": "Default",
@@ -388,19 +360,15 @@
       },
       {
         "netclass": "Default",
-        "pattern": "/MM_RGB"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "/SCL1"
-      },
-      {
-        "netclass": "Default",
-        "pattern": "unconnected-(U5-NC-Pad10)"
-      },
-      {
-        "netclass": "Default",
         "pattern": "VBUS"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad6)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "Net-(J2-CC2)"
       },
       {
         "netclass": "Default",
@@ -408,15 +376,47 @@
       },
       {
         "netclass": "Default",
-        "pattern": "unconnected-(U5-NC-Pad9)"
-      },
-      {
-        "netclass": "Default",
         "pattern": "/USB_D-"
       },
       {
         "netclass": "Default",
+        "pattern": "/SCL1"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "+3V3"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/RGB_DATA"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-D2--Pad5)"
+      },
+      {
+        "netclass": "Default",
         "pattern": "unconnected-(D1-DOUT-Pad2)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-D2+-Pad4)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "/MM_RGB"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U1-GPIO9-Pad8)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad10)"
+      },
+      {
+        "netclass": "Default",
+        "pattern": "unconnected-(U5-NC-Pad9)"
       }
     ]
   },
