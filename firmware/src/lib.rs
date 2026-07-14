@@ -78,6 +78,12 @@ pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers,
 pub const NVS_OFFSET: usize = 0x9000;
 pub const NVS_SIZE: usize = 0x6000;
 
+/// Set to `true` while the HTTP server is writing a new firmware image to flash.
+pub static OTA_IN_PROGRESS: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
+
+/// Set to `true` while the background state task is accessing the flash peripheral.
+pub static FLASH_LOCKED: portable_atomic::AtomicBool = portable_atomic::AtomicBool::new(false);
+
 #[derive(Debug, Format, Clone)]
 pub enum DataUpdate {
     Settings(Settings),

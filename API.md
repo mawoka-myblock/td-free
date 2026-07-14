@@ -92,3 +92,36 @@ may throw 408 if internal function timeouted
 ```
 
 Return RGBMultipliers like `/config/rgb`
+
+### POST /ota/upload Flash new firmware
+
+Uploads a raw firmware binary. The image is streamed directly into the unused OTA
+partition, the next OTA slot is selected, and its state is set to pending verify.
+On success the device reboots automatically after ~3 seconds.
+
+The request must include a `Content-Length` header and the body must be the
+firmware binary (e.g. produced by `espflash save-image` or `cargo run`).
+
+Example using `curl`:
+
+```bash
+curl -X POST -H "Content-Type: application/octet-stream" \
+  --data-binary @firmware.bin \
+  http://10.10.10.1/ota/upload
+```
+
+Response on success:
+
+```
+OTA upload complete, rebooting...
+```
+
+Possible non-200 responses:
+
+- `405` – only `POST` is supported.
+- `423` – an OTA upload is already in progress.
+- `503` – flash is currently busy (e.g. NVS write in progress).
+- `500` / `413` – initialization, partition, or image size error.
+
+> **Caution:** During an upload the device rejects concurrent config writes so
+> that no two tasks access the flash peripheral simultaneously.
