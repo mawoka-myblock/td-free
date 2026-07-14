@@ -5,7 +5,7 @@
 use core::fmt::Write;
 use defmt::Format;
 use embassy_sync::{
-    blocking_mutex::raw::CriticalSectionRawMutex, mutex::Mutex, pubsub::PubSubChannel, watch::Watch,
+    blocking_mutex::raw::CriticalSectionRawMutex, pubsub::PubSubChannel, watch::Watch,
 };
 use heapless::String;
 use serde::{Deserialize, Serialize};
@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::helpers::{
     RGBMultipliers,
     calibration::CalibrationCommand,
-    storage::{Settings, WifiCreds, nvs::Nvs},
+    storage::{Settings, WifiCreds},
 };
 
 extern crate alloc;
@@ -75,7 +75,6 @@ pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Wa
 
 pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers, 1> = Watch::new();
 
-pub type NvsMutex = Mutex<CriticalSectionRawMutex, Nvs>;
 pub const NVS_OFFSET: usize = 0x9000;
 pub const NVS_SIZE: usize = 0x6000;
 
@@ -84,6 +83,8 @@ pub enum DataUpdate {
     Settings(Settings),
     RgbMulti(RGBMultipliers),
     Wifi(WifiCreds),
+    DeleteWifiCreds,
+    InitUpdate,
 }
 
 pub static DATA_UPDATE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, DataUpdate, 2, 1, 1> =

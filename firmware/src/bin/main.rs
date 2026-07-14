@@ -14,7 +14,6 @@ use embassy_futures::select::Either;
 use embassy_futures::select::select;
 use embassy_net::Ipv4Cidr;
 use embassy_net::StaticConfigV4;
-use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
 use esp_backtrace as _;
 use esp_hal::clock::CpuClock;
@@ -26,10 +25,8 @@ use esp_radio::wifi::ControllerConfig;
 use esp_radio::wifi::ap::AccessPointConfig;
 use esp_radio::wifi::sta::StationConfig;
 use firmware::CLIENT_CONNECTED;
-use firmware::helpers::storage::NvsStored as _;
-use firmware::helpers::storage::WifiCreds;
-use firmware::helpers::storage::nvs::Nvs;
-use firmware::{NvsMutex, tasks};
+use firmware::DATA_UPDATE_CHANNEL;
+use firmware::tasks;
 use picoserve::AppBuilder;
 extern crate alloc;
 
@@ -82,14 +79,10 @@ async fn main(spawner: Spawner) -> ! {
     // let _stack = trouble_host::new(ble_controller, &mut resources);
     CLIENT_CONNECTED.sender().send(false);
 
-    let nvs: &'static NvsMutex = firmware::mk_static!(
-        NvsMutex,
-        Mutex::new(Nvs::new(firmware::NVS_OFFSET, firmware::NVS_SIZE, peripherals.FLASH).unwrap())
-    );
+    let (wifi_creds, flash_peri) =
+        tasks::states::init_signals_and_get_wifi_creds(peripherals.FLASH).await;
 
-    let wifi_creds = tasks::states::init_signals_and_get_wifi_creds(nvs).await;
-
-    spawner.spawn(tasks::states::data_update_save_task(nvs).unwrap());
+    spawner.spawn(tasks::states::data_update_save_task_and_ota(flash_peri).unwrap());
     spawner.spawn(tasks::leds::main_led_task(peripherals.LEDC, peripherals.GPIO7).unwrap());
     spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
 
@@ -128,7 +121,9 @@ async fn main(spawner: Spawner) -> ! {
         let connect_is_err = wifi_controller.connect_async().await.is_err();
         if connect_is_err {
             warn!("Resetting wifi creds");
-            let _ = WifiCreds::delete(nvs).await;
+            DATA_UPDATE_CHANNEL
+                .immediate_publisher()
+                .publish_immediate(firmware::DataUpdate::DeleteWifiCreds);
             Timer::after_millis(200).await;
             software_reset();
         }
@@ -195,7 +190,9 @@ async fn main(spawner: Spawner) -> ! {
             Either::First(_) => (),
             Either::Second(_) => {
                 warn!("Resetting wifi creds");
-                let _ = WifiCreds::delete(nvs).await;
+                DATA_UPDATE_CHANNEL
+                    .immediate_publisher()
+                    .publish_immediate(firmware::DataUpdate::DeleteWifiCreds);
                 Timer::after_millis(200).await;
                 software_reset()
             }

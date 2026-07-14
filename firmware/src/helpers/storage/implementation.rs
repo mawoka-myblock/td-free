@@ -1,4 +1,4 @@
-use crate::NvsMutex;
+use crate::helpers::storage::nvs::Nvs;
 use serde::{Serialize, de::DeserializeOwned};
 use tickv::ErrorCode;
 
@@ -21,9 +21,7 @@ pub trait NvsStored: Serialize + DeserializeOwned + Sized {
     const KEY: &'static [u8];
 
     #[allow(async_fn_in_trait)]
-    async fn save(&self, nvs_mutex: &'static NvsMutex) -> Result<(), NvsOpError> {
-        let nvs = nvs_mutex.lock().await;
-
+    async fn save(&self, nvs: &Nvs) -> Result<(), NvsOpError> {
         nvs.invalidate_key(Self::KEY).await.or_else(|e| match e {
             ErrorCode::KeyNotFound => Ok(()),
             other => Err(other),
@@ -37,9 +35,7 @@ pub trait NvsStored: Serialize + DeserializeOwned + Sized {
         Ok(())
     }
     #[allow(async_fn_in_trait)]
-    async fn read(nvs_mutex: &'static NvsMutex) -> Result<Option<Self>, NvsOpError> {
-        let nvs = nvs_mutex.lock().await;
-
+    async fn read(nvs: &Nvs) -> Result<Option<Self>, NvsOpError> {
         let data = match nvs.get_key(Self::KEY).await {
             Ok(data) => data,
             Err(ErrorCode::KeyNotFound) => return Ok(None),
@@ -49,8 +45,7 @@ pub trait NvsStored: Serialize + DeserializeOwned + Sized {
         Ok(Some(postcard::from_bytes(&data)?))
     }
     #[allow(async_fn_in_trait)]
-    async fn delete(nvs_mutex: &'static NvsMutex) -> Result<(), NvsOpError> {
-        let nvs = nvs_mutex.lock().await;
+    async fn delete(nvs: &Nvs) -> Result<(), NvsOpError> {
         nvs.invalidate_key(Self::KEY).await?;
         Ok(())
     }
