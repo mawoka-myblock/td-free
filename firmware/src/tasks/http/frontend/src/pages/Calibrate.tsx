@@ -87,11 +87,15 @@ export function CalibrationPage({
 	const [measurement, setMeasurement] = useState<MeasurementChanged | null>(
 		import.meta.env.PROD
 			? null
-			: {
+			: 				{
 					td: "1.4",
+					td_r: "0.8",
+					td_g: "1.5",
+					td_b: "0.9",
 					hex_color: "FF0000",
 					buf_count: 21,
 				},
+
 	);
 
 	const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);

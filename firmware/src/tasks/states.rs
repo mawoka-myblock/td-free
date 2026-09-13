@@ -12,14 +12,10 @@ pub async fn init_signals_and_get_wifi_creds(nvs_mutex: &'static NvsMutex) -> Op
         .ok()
         .flatten()
         .unwrap_or_default();
-    let wifi = WifiCreds::read(nvs_mutex)
-        .await
-        .ok()
-        .flatten();
+    let wifi = WifiCreds::read(nvs_mutex).await.ok().flatten();
     SETTINGS_DATA_WATCH.sender().send(settings);
     wifi
 }
-
 
 #[embassy_executor::task]
 pub async fn data_update_save_task(nvs_mutex: &'static NvsMutex) {

@@ -49,13 +49,19 @@ pub static WIFI_STATE: Watch<CriticalSectionRawMutex, WifiState, 1> = Watch::new
 
 #[derive(Debug, Clone, Format, PartialEq, PartialOrd, Default, Serialize)]
 pub struct MeasurementData {
-    #[serde(serialize_with = "serialize_td")]
+    #[serde(serialize_with = "serialize_f32_one_dec")]
     td: f32,
+    #[serde(serialize_with = "serialize_f32_one_dec")]
+    td_r: f32,
+    #[serde(serialize_with = "serialize_f32_one_dec")]
+    td_g: f32,
+    #[serde(serialize_with = "serialize_f32_one_dec")]
+    td_b: f32,
     hex_color: Option<String<6>>,
     buf_count: Option<u32>,
 }
 
-fn serialize_td<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error>
+fn serialize_f32_one_dec<S>(value: &f32, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {

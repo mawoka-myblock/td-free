@@ -11,25 +11,28 @@ use esp_hal::{
 use esp_hal_smartled::{SmartLedsAdapterAsync, buffer_size_async};
 use smart_leds::{RGB8, SmartLedsWriteAsync, gamma};
 
-use crate::{CLIENT_CONNECTED, MEASUREMENT_STATE, WIFI_STATE, MeasurementState, WifiState};
+use crate::{CLIENT_CONNECTED, MEASUREMENT_STATE, MeasurementState, WIFI_STATE, WifiState};
 
-static LED_COMMAND_CHANNEL: PubSubChannel<CriticalSectionRawMutex, u8, 2, 1, 1> =
+static LED_COMMAND_CHANNEL: PubSubChannel<CriticalSectionRawMutex, RGB8, 2, 1, 1> =
     PubSubChannel::new();
 
-/// Sets the measurement LED brightness in percent (0-100).
+/// Sets the measurement LED to an arbitrary RGB colour.
+pub fn set_led_color(color: RGB8) {
+    LED_COMMAND_CHANNEL.publish_immediate(color);
+}
+
+/// Sets the measurement LED to a uniform white brightness (0-100 %).
 pub fn set_led_brightness(brightness: u8) {
-    LED_COMMAND_CHANNEL.publish_immediate(brightness.min(100));
+    let v = brightness.min(100);
+    let meas_val = (v as u32 * 255 / 100).min(255) as u8;
+    set_led_color(RGB8::new(meas_val, meas_val, meas_val));
 }
 
 /// Drives both WS2812B LEDs:
-/// - GPIO7: measurement LED (white, brightness controlled by the sensor task)
+/// - GPIO7: measurement LED (RGB colour controlled by the sensor task)
 /// - GPIO4: indicator/status LED (colour based on device state)
 #[embassy_executor::task]
-pub async fn led_task(
-    rmt_per: RMT<'static>,
-    p7: GPIO7<'static>,
-    p4: GPIO4<'static>,
-) {
+pub async fn led_task(rmt_per: RMT<'static>, p7: GPIO7<'static>, p4: GPIO4<'static>) {
     let freq = Rate::from_mhz(80);
     let rmt = Rmt::new(rmt_per, freq).unwrap().into_async();
 
@@ -54,7 +57,7 @@ pub async fn led_task(
         .await
         .unwrap();
 
-    let mut measurement_brightness: u8 = 0;
+    let mut measurement_color = RGB8::new(0, 0, 0);
     let mut measurement = measurement_sub.get().await;
     let mut wifi = wifi_sub.get().await;
     let mut client = client_sub.get().await;
@@ -62,11 +65,9 @@ pub async fn led_task(
     info!("LED task ready");
 
     loop {
-        // Measurement LED: white at the commanded brightness.
-        let meas_val = (measurement_brightness as u32 * 255 / 100).min(255) as u8;
-        let meas_color = RGB8::new(meas_val, meas_val, meas_val);
+        // Measurement LED: driven directly by the commanded colour.
         measurement_led
-            .write(gamma([meas_color].into_iter()))
+            .write(gamma([measurement_color].into_iter()))
             .await
             .unwrap();
 
@@ -78,7 +79,7 @@ pub async fn led_task(
             .unwrap();
 
         embassy_futures::select::select4(
-            async { measurement_brightness = brightness_sub.next_message_pure().await },
+            async { measurement_color = brightness_sub.next_message_pure().await },
             async { measurement = measurement_sub.changed().await },
             async { wifi = wifi_sub.changed().await },
             async { client = client_sub.changed().await },

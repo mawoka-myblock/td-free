@@ -11,7 +11,7 @@ The CAD is available in the [onshape workspace](https://cad.onshape.com/document
 | ------------------------- | ---------------------------------------- |
 | **Small**                 | Slightly bigger                          |
 | **Cheap**                 | More expensive                           |
-| Only td, no color         | **Measures color and td**                |
+| Measures td and color     | **Measures color and td**                |
 | WiFi-enabled              | Only via usb and screen                  |
 | **Open-Source Code**      | Closed source                            |
 | **No license required**   | License needs to be purchased            |

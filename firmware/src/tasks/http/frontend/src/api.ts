@@ -35,6 +35,9 @@ export type ValueMeasurement = {
 
 export type MeasurementData = {
 	td: string;
+	td_r?: string;
+	td_g?: string;
+	td_b?: string;
 	hex_color?: string;
 	buf_count?: number;
 };

@@ -25,6 +25,10 @@ or
 ```json
 {
     "td": "2.5",
+    "td_r": "2.4",
+    "td_g": "2.5",
+    "td_b": "2.6",
+    "hex_color": "3D8AFF",
     "buf_count": Option<12>
 }
 ```
@@ -53,7 +57,7 @@ Sets/Gets settings:
 ### GET /config/info Get Device Info
 ```json
 {
-    "has_color": false,
+    "has_color": true,
     "version": "06556+4-3.3"
 }
 ```

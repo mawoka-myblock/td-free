@@ -1,4 +1,5 @@
 import { useEffect, useState } from "preact/hooks";
+import { ChannelReadings } from "../components/ChannelReadings";
 import { ColorSwatch } from "../components/ColorSwatch";
 import { ConfidenceBar } from "../components/ConfidenceBar";
 import { Pages } from "./types";
@@ -9,8 +10,11 @@ export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 	const [measurement, setMeasurement] = useState<MeasurementChanged | null>(
 		import.meta.env.PROD
 			? null
-			: {
+			: 				{
 					td: "1.4",
+					td_r: "0.8",
+					td_g: "1.5",
+					td_b: "0.9",
 					hex_color: "FF0000",
 					buf_count: 21,
 				},
@@ -77,10 +81,19 @@ export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 			{/* Color + Confidence */}
 			{measurement?.hex_color && (
 				<div class="flex flex-col gap-3 items-center">
-					<ColorSwatch hex={`#${measurement?.hex_color}`} />
-					<ConfidenceBar sampleCount={measurement?.buf_count} />
+					<ColorSwatch hex={`#${measurement.hex_color}`} />
+					<ConfidenceBar sampleCount={measurement.buf_count} />
 				</div>
 			)}
+			{typeof measurement === "object" &&
+				measurement != null &&
+				(measurement.td_r || measurement.td_g || measurement.td_b) && (
+					<ChannelReadings
+						td_r={measurement.td_r}
+						td_g={measurement.td_g}
+						td_b={measurement.td_b}
+					/>
+				)}
 			<div class="flex justify-around">
 				<ButtonLink onClick={() => setPage("settings")}>
 					Settings
