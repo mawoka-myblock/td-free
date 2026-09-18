@@ -2,7 +2,7 @@
 edition      = "2024"
 name         = "firmware"
 rust-version = "1.88"
-version      = "0.1.0"
+version      = "0.9.1" // bump by hand or update during build?
 
 [[bin]]
 name = "firmware"

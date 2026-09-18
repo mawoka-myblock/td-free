@@ -22,6 +22,7 @@ function round(value: number, decimals = 6) {
 export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 	const [isValid, setIsValid] = useState(true);
 	const [loading, setLoading] = useState(true);
+	const [version, setVersion] = useState("");
 
 	const [settings, setSettings] = useState<Settings>({
 		led_brightness: 100,
@@ -63,6 +64,15 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 				console.error(err);
 			} finally {
 				if (!cancelled) setLoading(false);
+			}
+			try {
+				const infoRes = await fetch("/config/info");
+				if (infoRes.ok) {
+					const info = (await infoRes.json()) as { version: string };
+					if (!cancelled) setVersion(info.version);
+				}
+			} catch (err) {
+				console.error(err);
 			}
 		})();
 
@@ -290,6 +300,12 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 			<ButtonLink onClick={() => setPage("dashboard")}>
 				Dashboard
 			</ButtonLink>
+
+			{version && (
+				<p class="text-white text-center text-sm -my-2">
+					Firmware v{version}
+				</p>
+			)}
 		</>
 	);
 }

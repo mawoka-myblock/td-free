@@ -56,6 +56,6 @@ pub async fn data_update_save_task(nvs_mutex: &'static NvsMutex) {
 pub async fn init_dev_info(has_color: bool) {
     DEVICE_INFO_WATCH.sender().send(DeviceInfo {
         has_color,
-        version: String::new(),
+        version: String::try_from(env!("CARGO_PKG_VERSION")).unwrap_or_default(), // actually get version
     });
 }
