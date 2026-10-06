@@ -80,6 +80,9 @@ portable-atomic = { version = "1.13", default-features = false }
 smart-leds = "0.4"
 esp-hal-smartled = { git = "https://github.com/florianL21/esp-hal-community", features = ["defmt"], rev = "728d7f9" }
 
+embedded-hal = { version = "1", features = ["defmt-03"] }
+embedded-hal-async = { version = "1", features = ["defmt-03"] }
+
 veml7700 = { version = "0.3.2" }
 
 picoserve = { version = "0.18", features = ["embassy", "defmt", "json"] }

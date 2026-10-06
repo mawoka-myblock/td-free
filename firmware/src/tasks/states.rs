@@ -1,18 +1,29 @@
+use embassy_time::Timer;
 use esp_hal::system::software_reset;
 use heapless::String;
 
 use crate::{
-    DATA_UPDATE_CHANNEL, DEVICE_INFO_WATCH, DeviceInfo, NvsMutex, SETTINGS_DATA_WATCH,
-    helpers::storage::{NvsStored, Settings, WifiCreds},
+    DATA_UPDATE_CHANNEL, DEVICE_INFO_WATCH, DeviceInfo, NvsMutex, RGB_MULTIPLIERS_WATCH,
+    SETTINGS_DATA_WATCH,
+    helpers::{
+        RGBMultipliers,
+        storage::{NvsStored, Settings, WifiCreds},
+    },
 };
 
 pub async fn init_signals_and_get_wifi_creds(nvs_mutex: &'static NvsMutex) -> Option<WifiCreds> {
     let settings = Settings::read(nvs_mutex)
         .await
-        .ok()
-        .flatten()
+        .expect("Couldn't read Settings")
         .unwrap_or_default();
-    let wifi = WifiCreds::read(nvs_mutex).await.ok().flatten();
+    let rgb_m = RGBMultipliers::read(nvs_mutex)
+        .await
+        .expect("Couldn't read RGBMultipliers")
+        .unwrap_or_default();
+    let wifi = WifiCreds::read(nvs_mutex)
+        .await
+        .expect("Couldn't read RGBMultipliers");
+    RGB_MULTIPLIERS_WATCH.sender().send(rgb_m);
     SETTINGS_DATA_WATCH.sender().send(settings);
     wifi
 }
@@ -25,13 +36,17 @@ pub async fn data_update_save_task(nvs_mutex: &'static NvsMutex) {
     loop {
         let msg = sub.next_message_pure().await;
         match msg {
+            crate::DataUpdate::RgbMulti(d) => {
+                d.save(nvs_mutex).await.unwrap();
+                RGB_MULTIPLIERS_WATCH.sender().send(d)
+            }
             crate::DataUpdate::Settings(d) => {
                 d.save(nvs_mutex).await.unwrap();
                 SETTINGS_DATA_WATCH.sender().send(d)
             }
             crate::DataUpdate::Wifi(d) => {
                 d.save(nvs_mutex).await.unwrap();
-                embassy_time::Timer::after_millis(300).await;
+                Timer::after_millis(300).await;
                 software_reset()
             }
         }

@@ -90,14 +90,15 @@ async fn main(spawner: Spawner) -> ! {
     let wifi_creds = tasks::states::init_signals_and_get_wifi_creds(nvs).await;
 
     spawner.spawn(tasks::states::data_update_save_task(nvs).unwrap());
-    spawner.spawn(
-        tasks::leds::led_task(peripherals.RMT, peripherals.GPIO7, peripherals.GPIO4).unwrap(),
-    );
+    spawner.spawn(tasks::leds::main_led_task(peripherals.LEDC, peripherals.GPIO7).unwrap());
+    spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
 
     spawner.spawn(
         tasks::sensors::sensor_task(
             peripherals.GPIO6,
             peripherals.GPIO5,
+            peripherals.GPIO8,
+            peripherals.GPIO10,
             peripherals.I2C0,
         )
         .unwrap(),
