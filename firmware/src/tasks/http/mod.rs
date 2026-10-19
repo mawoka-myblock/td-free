@@ -1,6 +1,7 @@
 mod config;
 mod frontend;
 pub mod network;
+mod spoolman;
 mod sse;
 use picoserve::AppRouter;
 use picoserve::response::{IntoResponse, StatusCode};
@@ -54,6 +55,7 @@ impl AppBuilder for AppProps {
             .nest("", frontend::frontend_router())
             .nest("/events", sse::event_router())
             .nest("/config", config::config_router())
+            .nest("/spoolman", spoolman::spoolman_router())
             // .nest("/api", api::api_router())
             .with_state(state)
     }

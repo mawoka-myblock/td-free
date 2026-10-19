@@ -63,9 +63,9 @@ async fn main(spawner: Spawner) -> ! {
     let _ = peripherals.GPIO16;
     let _ = peripherals.GPIO17;
 
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 66320);
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 64*1024);
     // COEX needs more RAM - so we've added some more
-    esp_alloc::heap_allocator!(size: 64 * 1024);
+    esp_alloc::heap_allocator!(size: 36 * 1024);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_interrupt =
@@ -236,6 +236,8 @@ async fn main(spawner: Spawner) -> ! {
         picoserve::AppRouter<tasks::http::AppProps>,
         tasks::http::AppProps::new().build_app()
     );
+
+    spawner.spawn(tasks::spoolman::spoolman_task(stack).unwrap());
 
     for task_id in 0..tasks::http::WEB_TASK_POOL_SIZE {
         spawner.spawn(tasks::http::web_task(task_id, stack, app).unwrap());

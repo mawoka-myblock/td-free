@@ -92,6 +92,7 @@ jobs:
       - name: Build | Compile (production)
         run: |
           export VERSION=${BRANCH}@${SHA_SHORT}
+          export DEFMT_LOG=error
           cargo build -p firmware --release
         env:
           BRANCH: ${{ env.branch }}
@@ -113,7 +114,7 @@ jobs:
       - name: Build | Compile (debug)
         run: |
           export VERSION=${BRANCH}@${SHA_SHORT}
-          export DEFMT_LOG=error
+          export DEFMT_LOG=info
           cargo build -p firmware --release
         env:
           BRANCH: ${{ env.branch }}
@@ -127,6 +128,8 @@ jobs:
         run: |
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-${{ env.sha_short }}_debug.bin
           rclone copyto td-free.bin garage:${{ secrets.MINIO_BUCKET }}/${{ env.branch }}/td-free-latest_debug.bin
+          rclone copyto target/riscv32imc-unknown-none-elf/release/firmware garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-${{ env.sha_short }}_debug.elf
+          rclone copyto target/riscv32imc-unknown-none-elf/release/firmware garage:${{ secrets.MINIO_BUCKET }}/releases/td-free-latest_debug.elf
       - name: Rename file
         run: mv td-free.bin td-free_debug.bin
       - uses: actions/upload-artifact@v7

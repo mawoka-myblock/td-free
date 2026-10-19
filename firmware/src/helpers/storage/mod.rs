@@ -18,6 +18,8 @@ pub struct Settings {
     /// in %
     pub led_brightness: u8,
     pub algo: AlgoAdjustment,
+    pub spoolman_host: Option<heapless::String<32>>,
+    pub spoolman_port: Option<u16>,
 }
 
 impl Default for Settings {
@@ -25,6 +27,8 @@ impl Default for Settings {
         Self {
             led_brightness: 100,
             algo: AlgoAdjustment::default(),
+            spoolman_host: Option::None,
+            spoolman_port: Option::None,
         }
     }
 }

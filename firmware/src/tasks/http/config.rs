@@ -36,7 +36,7 @@ async fn get_settings() -> impl IntoResponse {
 }
 
 async fn set_settings(extract::Json(settings): extract::Json<Settings>) -> impl IntoResponse {
-    DATA_UPDATE_CHANNEL.publish_immediate(crate::DataUpdate::Settings(settings));
+    DATA_UPDATE_CHANNEL.publish_immediate(crate::DataUpdate::Settings(settings.clone()));
     response::Json(settings)
 }
 

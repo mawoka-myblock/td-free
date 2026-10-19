@@ -3,6 +3,7 @@ import { ColorSwatch } from "../components/ColorSwatch";
 import { ConfidenceBar } from "../components/ConfidenceBar";
 import { Pages } from "./types";
 import { ButtonLink } from "../components/ButtonLink";
+import { SpoolmanSave } from "../components/SpoolmanSave";
 import { MeasurementChanged } from "../api";
 
 export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
@@ -11,22 +12,10 @@ export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 			? null
 			: {
 					td: "1.4",
-					hex_color: "FF0000",
+					hex_color: "FFFFAC",
 					buf_count: 21,
 				},
 	);
-
-	function handleSaveToSpoolman() {
-		const id = prompt("Spoolman Filament ID");
-		if (!id) return;
-		if (!measurement?.td) {
-			alert("No valid measurement");
-			return;
-		}
-		window.location.assign(
-			`/spoolman/set?filament_id=${id}&value=${measurement.td}`,
-		);
-	}
 
 	useEffect(() => {
 		const es = new EventSource("/events/data");
@@ -81,6 +70,14 @@ export function DashboardPage({ setPage }: { setPage: (page: Pages) => void }) {
 					<ConfidenceBar sampleCount={measurement?.buf_count} />
 				</div>
 			)}
+			<SpoolmanSave
+				td={
+					measurement && measurement !== "no_filament"
+						? measurement.td
+						: undefined
+				}
+				color={measurement?.hex_color}
+			/>
 			<div class="flex justify-around">
 				<ButtonLink onClick={() => setPage("settings")}>
 					Settings
