@@ -1,6 +1,10 @@
+opencode -s ses_eeea170f0ffeTvjjMf0spo0cMp
+
 # Td-Free
 
 A free and open source device to measure the td value of your filaments.
+
+Documentation: [API.md](API.md) describes the HTTP API, [FIRMWARE.md](FIRMWARE.md) explains how the firmware works.
 
 The CAD is available in the [onshape workspace](https://cad.onshape.com/documents/e7ec65aec40b24c9a33c1902/w/dc90f86d4d08d2181a707cee/e/a86c6c8c0a4124509901ffce)
 (licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/)) and the print files can be downloaded from [Printables](https://www.printables.com/model/919380-td-free)
@@ -11,7 +15,7 @@ The CAD is available in the [onshape workspace](https://cad.onshape.com/document
 | ------------------------- | ---------------------------------------- |
 | **Small**                 | Slightly bigger                          |
 | **Cheap**                 | More expensive                           |
-| Only td, no color         | **Measures color and td**                |
+| Measures td and color     | **Measures color and td**                |
 | WiFi-enabled              | Only via usb and screen                  |
 | **Open-Source Code**      | Closed source                            |
 | **No license required**   | License needs to be purchased            |

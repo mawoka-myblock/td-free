@@ -1,6 +1,19 @@
 [workspace]
 members = [
-  "firmware"
+  "firmware",
+  "td-calc",
+]
+default-members = [
+  "firmware",
 ]
 
 resolver = "2"
+
+[profile.dev]
+opt-level = "s"
+
+[profile.release]
+codegen-units = 1
+debug         = 2
+lto           = 'fat'
+opt-level     = 's'

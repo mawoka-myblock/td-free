@@ -11,7 +11,7 @@ use heapless::String;
 use serde::{Deserialize, Serialize};
 
 use crate::helpers::{
-    RGBMultipliers,
+    BlackReference, RGBMultipliers,
     calibration::CalibrationCommand,
     storage::{Settings, WifiCreds, nvs::Nvs},
 };
@@ -75,6 +75,11 @@ pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Wa
 
 pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers, 1> = Watch::new();
 
+pub static BLACK_REF_WATCH: Watch<CriticalSectionRawMutex, BlackReference, 1> = Watch::new();
+
+pub static BLACK_CALIBRATE_CHANNEL: PubSubChannel<CriticalSectionRawMutex, (), 2, 1, 1> =
+    PubSubChannel::new();
+
 pub type NvsMutex = Mutex<CriticalSectionRawMutex, Nvs>;
 pub const NVS_OFFSET: usize = 0x9000;
 pub const NVS_SIZE: usize = 0x6000;
@@ -83,6 +88,7 @@ pub const NVS_SIZE: usize = 0x6000;
 pub enum DataUpdate {
     Settings(Settings),
     RgbMulti(RGBMultipliers),
+    BlackRef(BlackReference),
     Wifi(WifiCreds),
 }
 

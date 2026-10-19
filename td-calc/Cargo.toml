@@ -1,0 +1,21 @@
+[package]
+name = "td-calc"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+
+[[bin]]
+name = "td-calc"
+path = "src/main.rs"
+required-features = ["std"]
+
+[features]
+default = ["std"]
+std = []
+defmt = ["dep:defmt", "heapless/defmt"]
+
+[dependencies]
+defmt = { version = "1.0.1", optional = true }
+heapless = { version = "0.9", features = ["serde"] }
+micromath = "*"
+serde = { version = "1", default-features = false, features = ["derive"] }

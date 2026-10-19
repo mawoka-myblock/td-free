@@ -1333,6 +1333,7 @@ dependencies = [
  "smart-leds",
  "smoltcp",
  "static_cell",
+ "td-calc",
  "thiserror",
  "tickv",
  "veml7700",
@@ -2295,6 +2296,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "td-calc"
+version = "0.1.0"
+dependencies = [
+ "defmt 1.1.0",
+ "heapless 0.9.3",
+ "micromath",
+ "serde",
 ]
 
 [[package]]
