@@ -11,15 +11,17 @@ use td_calc::{AlgoAdjustment, BlackReference, RGBMultipliers};
 
 fn find_default_log_file() -> PathBuf {
     let candidates = [
+        PathBuf::from("testdata/logged_data.txt"),
+        PathBuf::from("td-calc/testdata/logged_data.txt"),
         PathBuf::from("logged_data.txt"),
-        PathBuf::from("../logged_data.txt"),
+        PathBuf::from("../td-calc/testdata/logged_data.txt"),
     ];
     for c in &candidates {
         if c.exists() {
             return c.clone();
         }
     }
-    PathBuf::from("logged_data.txt")
+    PathBuf::from("testdata/logged_data.txt")
 }
 
 fn print_help() {

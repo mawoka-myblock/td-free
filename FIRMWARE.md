@@ -152,8 +152,8 @@ loop:
     wait for an SSE client
     detection cycle (off + dim white)         -> publish Idle or FilamentInserted
     if confirmed inserted:
-        2 cycles of: off (ambient) + R + G + B readings -> median buffers
-        transmittance (black-ref subtracted)  -> td + hex color
+        2 cycles of: off (ambient) + R + G + B dual (ALS+WHITE) readings
+        -> SpectralReadings -> evaluate_measurement (td + hex color)
         handle pending black-reference capture
         handle pending color calibration
         publish MeasurementData
@@ -166,9 +166,15 @@ loop:
 - `td-calc` (`td-calc/`) - hardware-independent `#![no_std]` library + host
   CLI/test suite containing the TD, color, detection, median buffer, and
   calibration algorithms. Shared directly by `firmware` on ESP32-C3 and
-  runnable natively on the host against `logged_data.txt`:
-  - Run tests: `cargo td-test` (or `cd td-calc && cargo test`)
-  - Evaluate logged data: `cargo td-eval` (or `cargo td-eval --all-levels`)
+  runnable natively on the host against a recorded log:
+  - Run tests: `cargo td-test` (6 tests replay `td-calc/testdata/logged_data.txt`)
+  - Evaluate logged data: `cargo td-eval [--all-levels] [--use-black-ref] ...`
+  - The aliases build for the host target; the root `.cargo/config.toml`
+    (riscv32 target) does not apply inside `td-calc/`, so plain
+    `cargo test` only works from within `td-calc/`.
+  - New captures are annotated by hand with ground truth so the offline
+    evaluation can score itself: edit the `# INSERTED` marker to
+    `# INSERTED: <Name> (TD: <expected td>, Hex: #<expected hex>)`.
 - `firmware` (`firmware/src/bin/main.rs`) - the production firmware (web UI, API,
   measurement, storage).
 - `data_logger` (`firmware/src/bin/data_logger.rs`) - development tool: no Wi-Fi,

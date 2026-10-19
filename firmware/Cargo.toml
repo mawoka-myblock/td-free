@@ -92,7 +92,7 @@ veml7700 = { version = "0.3.2" }
 picoserve = { version = "0.18", features = ["embassy", "defmt", "json"] }
 serde = { version = "1", default-features = false, features = ["derive"] }
 serde-json-core = { version = "0.6" }
-heapless = { version = "*", features = ["serde"] }
+heapless = { version = "0.9", features = ["serde"] }
 
 edge-dhcp = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }
 edge-nal = { git = "https://github.com/sysgrok/edge-net", rev = "1f084b4" }

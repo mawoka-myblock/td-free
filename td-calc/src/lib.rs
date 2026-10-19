@@ -106,7 +106,7 @@ mod tests {
          evaluate_measurement, td_from_transmittance, transmittance, update_detection,
     };
 
-    const LOGGED_DATA: &str = include_str!("../../logged_data.txt");
+    const LOGGED_DATA: &str = include_str!("../testdata/logged_data.txt");
 
     #[test]
     fn parses_all_six_filaments_and_detection_cycles() {
