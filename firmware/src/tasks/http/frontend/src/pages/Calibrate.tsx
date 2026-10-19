@@ -146,6 +146,39 @@ export function CalibrationPage({
 		save(DEFAULTS);
 	}
 
+	async function blackCal() {
+		setCalState("calibrating");
+		setCalMsg("");
+		try {
+			const res = await fetch("/config/black-calibrate", {
+				method: "POST",
+			});
+			if (res.status === 428) {
+				setCalState("error");
+				setCalMsg("No sensor client connected.");
+				return;
+			}
+			if (res.status === 408) {
+				setCalState("error");
+				setCalMsg(
+					"Timed out — insert an opaque black filament and retry.",
+				);
+				return;
+			}
+			if (!res.ok) {
+				setCalState("error");
+				setCalMsg("Request failed.");
+				return;
+			}
+			setCalState("success");
+			setCalMsg("Black reference stored.");
+			setTimeout(() => setCalState("idle"), 3000);
+		} catch {
+			setCalState("error");
+			setCalMsg("Request failed.");
+		}
+	}
+
 	async function autoCal() {
 		setCalState("calibrating");
 		setCalMsg("");
@@ -337,6 +370,22 @@ export function CalibrationPage({
 				{calState === "error" && calMsg && (
 					<p class="text-xs text-center text-red-600">{calMsg}</p>
 				)}
+
+				<Button
+					disabled={calBtn.disabled}
+					onClick={
+						calState === "error" || calState === "idle"
+							? blackCal
+							: undefined
+					}
+				>
+					Measure black reference
+				</Button>
+				<p class="text-xs text-center text-text-secondary">
+					Insert a fully opaque (black) filament before measuring
+					the black reference. It compensates light leaking around
+					the filament.
+				</p>
 
 				<Button onClick={reset}>Reset to defaults</Button>
 			</section>

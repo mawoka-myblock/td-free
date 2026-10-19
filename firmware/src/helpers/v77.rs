@@ -1,123 +1,94 @@
-use defmt::{Debug2Format, error, info, unwrap};
+use defmt::{Debug2Format, error, info};
 use embassy_time::Timer;
+use esp_hal::{Blocking, i2c::master::I2c};
 use heapless::Vec;
-use micromath::F32Ext;
+use td_calc::optics::DualReading;
+use veml7700::{Gain, IntegrationTime, Veml7700};
 
-use crate::tasks::{leds::set_led_brightness, sensors::VEML7700};
+pub type Veml7700Dev<'d> = Veml7700<I2c<'d, Blocking>>;
 
-const BASELINE_SAMPLE_COUNT: usize = 20;
+pub const SENSOR_GAIN: Gain = Gain::Two;
+pub const SENSOR_IT: IntegrationTime = IntegrationTime::_100ms;
 
-pub async fn take_baseline_reading<'d>(veml: &mut VEML7700<'d>) -> f32 {
-    let sample_delay = 100u32; // Increased delay to ensure fresh readings
-    let mut readings: Vec<f32, BASELINE_SAMPLE_COUNT> = Vec::new();
+/// The sensor integrates continuously and latches its registers at the
+/// end of each window. A read only `IT` after an LED change may return a
+/// window that started *before* the change, mixing old and new
+/// illumination. With a median of 3 samples only the first can be
+/// affected, which the median filters out.
+pub const SETTLE_MS: u64 = 150;
 
-    for _ in 0..BASELINE_SAMPLE_COUNT {
-        let clr = match veml.read_lux() {
-            Ok(d) => d,
-            Err(e) => {
-                error!("{:?}", Debug2Format(&e));
-                veml.disable().unwrap();
-                Timer::after_millis(100).await;
-                veml.enable().unwrap();
-                Timer::after_millis(1000).await;
-                continue;
-            }
-        };
-        let reading = clr as f32;
-        info!("Reading: {}", reading);
-        readings.push(reading).unwrap();
-        Timer::after_millis(sample_delay as u64).await;
-    }
+/// Delay between samples. Must exceed the integration time so that
+/// consecutive samples come from *independent* integration windows -
+/// otherwise the median filters nothing. Independent windows make the
+/// median robust against transient drops (e.g. Wi-Fi TX current spikes
+/// sagging the supply rail and dimming the LED).
+pub const SAMPLE_DELAY_MS: u64 = 120;
+const MAX_SAMPLES: usize = 8;
 
-    if readings.is_empty() {
-        return 0.0; // Avoid divide by zero or panics later
-    }
+/// Counts above this indicate the sensor is saturating
+pub const SATURATION_LIMIT: u16 = 60000;
 
-    // Calculate mean and std deviation
-    let mean = readings.iter().copied().sum::<f32>() / readings.len() as f32;
-    let std =
-        (readings.iter().map(|v| (v - mean).powi(2)).sum::<f32>() / readings.len() as f32).sqrt();
-
-    // Filter out outliers
-    let mut filtered: Vec<f32, BASELINE_SAMPLE_COUNT> = readings
-        .into_iter()
-        .filter(|v| (*v - mean).abs() <= 2.0 * std)
-        .collect();
-
-    // Calculate median from filtered data
-    if filtered.is_empty() {
-        return mean; // fallback to mean if all readings were filtered out
-    }
-
-    filtered.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median = if filtered.len().is_multiple_of(2) {
-        let mid = filtered.len() / 2;
-        (filtered[mid - 1] + filtered[mid]) / 2.0
-    } else {
-        filtered[filtered.len() / 2]
-    };
-
+pub async fn setup<'d>(
+    veml: &mut Veml7700Dev<'d>,
+) -> Result<(), veml7700::Error<esp_hal::i2c::master::Error>> {
+    veml.enable()?;
+    veml.set_integration_time(SENSOR_IT)?;
+    veml.set_gain(SENSOR_GAIN)?;
+    Timer::after_millis(SETTLE_MS).await;
     info!(
-        "Baseline calculation: mean={}, std={}, median={}",
-        mean, std, median
+        "VEML7700 initialized: gain x2, integration time {} ms",
+        SENSOR_IT.as_ms()
     );
-    median
+    Ok(())
 }
 
-pub async fn is_filament_inserted<'d>(
-    veml: &mut VEML7700<'d>,
-    dark_baseline_reading: f32,
-    threshold: f32,
-) -> (bool, f32) {
-    let mut detection_readings: Vec<f32, 3> = Vec::new();
-    set_led_brightness(25);
-    Timer::after_millis(150).await;
-    for i in 0..3 {
-        let current_reading = {
-            match veml.read_lux() {
-                Ok(d) => d,
-                Err(e) => {
-                    error!(
-                        "Failed to read sensor (attempt {}): {:?}",
-                        i + 1,
-                        Debug2Format(&e)
-                    );
-                    if i == 2 {
-                        // If all 3 attempts failed, return None
-                        return (false, 0.0);
-                    }
-                    continue;
-                }
-            }
-        };
-        unwrap!(detection_readings.push(current_reading));
+fn median_of(v: &mut Vec<f32, MAX_SAMPLES>) -> f32 {
+    if v.is_empty() {
+        return 0.0;
+    }
+    v.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = v.len();
+    if n.is_multiple_of(2) {
+        (v[n / 2 - 1] + v[n / 2]) / 2.0
+    } else {
+        v[n / 2]
+    }
+}
 
-        if i < 2 {
-            embassy_time::Timer::after_millis(100).await;
+/// Take `samples` simultaneous `(als, white)` readings and return their medians.
+/// Recovers the sensor after read failures (disable/re-enable cycle).
+pub async fn sample_dual_median(veml: &mut Veml7700Dev<'_>, samples: usize) -> DualReading {
+    let mut als_readings: Vec<f32, MAX_SAMPLES> = Vec::new();
+    let mut white_readings: Vec<f32, MAX_SAMPLES> = Vec::new();
+
+    for i in 0..samples.min(MAX_SAMPLES) {
+        if i > 0 {
+            Timer::after_millis(SAMPLE_DELAY_MS).await;
+        }
+        match (veml.read_raw(), veml.read_white()) {
+            (Ok(als), Ok(white)) => {
+                let _ = als_readings.push(als as f32);
+                let _ = white_readings.push(white as f32);
+            }
+            (Err(e), _) | (_, Err(e)) => {
+                error!("VEML7700 read failed: {:?}", Debug2Format(&e));
+                let _ = veml.disable();
+                Timer::after_millis(100).await;
+                let _ = veml.enable();
+                Timer::after_millis(SETTLE_MS).await;
+            }
         }
     }
-    detection_readings.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let median_reading = detection_readings[1]; // Middle value (median of 3)
-    /*
-    let mean = detection_readings.iter().sum::<f32>() / 3.0;
-    let variance = detection_readings
-        .iter()
-        .map(|x| (x - mean).powi(2))
-        .sum::<f32>()
-        / 3.0;
-    let std_dev = variance.sqrt();
 
-    if std_dev < 0.01 && median_reading > 10.0 {
-        warn!(
-            "VEML7700 readings very similar (std_dev: {}) - sensor might need more time",
-            std_dev
-        );
-    }
- */
-    let current_threshold = dark_baseline_reading - (1.0 - threshold) * dark_baseline_reading;
-    if median_reading > current_threshold {
-        (false, median_reading)
-    } else {
-        (true, median_reading)
-    }
+    DualReading::new(median_of(&mut als_readings), median_of(&mut white_readings))
+}
+
+/// Take `samples` white-channel readings and return their median.
+/// Recovers the sensor after read failures (disable/re-enable cycle).
+pub async fn sample_median(veml: &mut Veml7700Dev<'_>, samples: usize) -> f32 {
+    sample_dual_median(veml, samples).await.white
+}
+
+pub fn is_saturated(counts: u16) -> bool {
+    counts >= SATURATION_LIMIT
 }

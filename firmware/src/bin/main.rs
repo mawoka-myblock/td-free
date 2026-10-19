@@ -90,18 +90,33 @@ async fn main(spawner: Spawner) -> ! {
     let wifi_creds = tasks::states::init_signals_and_get_wifi_creds(nvs).await;
 
     spawner.spawn(tasks::states::data_update_save_task(nvs).unwrap());
-    spawner.spawn(tasks::leds::main_led_task(peripherals.LEDC, peripherals.GPIO7).unwrap());
-    spawner.spawn(tasks::leds::rgb_led_task(peripherals.RMT, peripherals.GPIO4).unwrap());
+
+    {
+        use esp_hal::rmt::{PulseCode, Rmt};
+        use esp_hal::time::Rate;
+        use esp_hal_smartled::{SmartLedsAdapterAsync, buffer_size_async};
+
+        let rmt = Rmt::new(peripherals.RMT, Rate::from_mhz(80))
+            .unwrap()
+            .into_async();
+        let status_buf = firmware::mk_static!(
+            [PulseCode; buffer_size_async(1)],
+            [PulseCode::default(); buffer_size_async(1)]
+        );
+        let measure_buf = firmware::mk_static!(
+            [PulseCode; buffer_size_async(1)],
+            [PulseCode::default(); buffer_size_async(1)]
+        );
+        // GPIO7 hosts the WS2812B measurement LED, GPIO4 the status LED
+        let status_led = SmartLedsAdapterAsync::new(rmt.channel0, peripherals.GPIO4, status_buf);
+        let measure_led = SmartLedsAdapterAsync::new(rmt.channel1, peripherals.GPIO7, measure_buf);
+        spawner.spawn(tasks::leds::status_led_task(status_led).unwrap());
+        spawner.spawn(tasks::leds::measure_led_task(measure_led).unwrap());
+    }
 
     spawner.spawn(
-        tasks::sensors::sensor_task(
-            peripherals.GPIO6,
-            peripherals.GPIO5,
-            peripherals.GPIO8,
-            peripherals.GPIO10,
-            peripherals.I2C0,
-        )
-        .unwrap(),
+        tasks::sensors::sensor_task(peripherals.GPIO6, peripherals.GPIO5, peripherals.I2C0)
+            .unwrap(),
     );
 
     let (rx, tx) = UsbSerialJtag::new(peripherals.USB_DEVICE)
@@ -124,6 +139,10 @@ async fn main(spawner: Spawner) -> ! {
             ControllerConfig::default().with_initial_config(sta_config),
         )
         .expect("Failed to initialize Wi-Fi controller");
+        // The Wi-Fi TX current spikes sag the supply rail, dimming the
+        // measurement LED mid-measurement. Cap TX power well below the
+        // 20 dBm default to keep the spikes manageable.
+        let _ = wifi_controller.set_max_tx_power(40); // 10 dBm
 
         let connect_is_err = wifi_controller.connect_async().await.is_err();
         if connect_is_err {
@@ -149,11 +168,13 @@ async fn main(spawner: Spawner) -> ! {
                 .with_ssid("Td-Free")
                 .with_auth_method(esp_radio::wifi::AuthenticationMethod::None),
         );
-        let (wifi_controller, interfaces) = esp_radio::wifi::new(
+        let (mut wifi_controller, interfaces) = esp_radio::wifi::new(
             peripherals.WIFI,
             ControllerConfig::default().with_initial_config(ap_config),
         )
         .expect("Failed to initialize Wi-Fi controller");
+        // See the station branch: cap TX power to avoid rail sag
+        let _ = wifi_controller.set_max_tx_power(40); // 10 dBm
         let ipv4_cfg = StaticConfigV4 {
             address: Ipv4Cidr::new(embassy_net::Ipv4Address::new(10, 10, 10, 1), 24),
             dns_servers: Default::default(),

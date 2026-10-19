@@ -1,5 +1,5 @@
-use core::fmt::Write;
-use defmt::{Debug2Format, debug, info, unwrap};
+use defmt::{debug, error, info, unwrap, warn};
+use embassy_sync::pubsub::PubSubBehavior;
 use embassy_time::Timer;
 use esp_hal::{
     Blocking,
@@ -7,102 +7,121 @@ use esp_hal::{
     peripherals,
     time::Rate,
 };
-use heapless::String;
 use veml7700::Veml7700;
 
 use crate::{
-    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, MEASUREMENT_DATA_WATCH, MEASUREMENT_STATE,
-    MeasurementData, MeasurementState, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
+    BLACK_CALIBRATE_CHANNEL, BLACK_REF_WATCH, CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED,
+    DATA_UPDATE_CHANNEL, MEASUREMENT_DATA_WATCH, MEASUREMENT_STATE, MeasurementData,
+    MeasurementState, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
     helpers::{
-        calibration::auto_calibrate_gray_reference,
+        BlackReference,
+        calibration::auto_calibrate_spectral,
         median_buffer::RunningMedianBuffer,
-        v33::{
-            apply_rgb_multipliers, apply_spectral_response_correction,
-            spectral_correction_from_rgb, take_rgb_white_balance_calibration,
-        },
-        v77::{is_filament_inserted, take_baseline_reading},
-        veml3328::Veml3328,
+        optics::{self, DualReading, SpectralReadings},
+        v77,
     },
-    tasks::{leds::set_led_brightness, states::init_dev_info},
+    tasks::{
+        leds::{MeasureLedCommand, set_measure_led},
+        states::init_dev_info,
+    },
 };
 
 pub type VEML7700<'d> = Veml7700<I2c<'d, Blocking>>;
-pub type VEML3328<'d> = Veml3328<I2c<'d, Blocking>>;
+
+const MEASUREMENT_CYCLES: usize = 2;
+/// Re-take the illumination baselines after this many consecutive idle
+/// cycles to compensate LED/sensor drift.
+const IDLE_REBASELINE_CYCLES: u32 = 50;
 
 #[embassy_executor::task]
 pub async fn sensor_task(
-    _sda_v77: peripherals::GPIO6<'static>,
-    _scl_v77: peripherals::GPIO5<'static>,
-    _sda_v33: peripherals::GPIO8<'static>,
-    _scl_v33: peripherals::GPIO10<'static>,
-    _i2c_per: peripherals::I2C0<'static>,
+    sda: peripherals::GPIO6<'static>,
+    scl: peripherals::GPIO5<'static>,
+    i2c_per: peripherals::I2C0<'static>,
 ) {
     let dev_state_sender = MEASUREMENT_STATE.sender();
     dev_state_sender.send(MeasurementState::Warmup);
 
-    let mut v77 = get_v77();
-    v77.enable().unwrap();
-    Timer::after_millis(200).await;
-    set_led_brightness(100);
-    info!("LED at 100%");
-    Timer::after_millis(150).await;
-    let v77_baseline_bright = take_baseline_reading(&mut v77).await;
-    set_led_brightness(25);
-    info!("LED at 25%");
-    Timer::after_millis(150).await;
-    let v77_baseline_dark = take_baseline_reading(&mut v77).await;
+    let i2c = I2c::new(i2c_per, Config::default().with_frequency(Rate::from_khz(100)))
+        .unwrap()
+        .with_sda(sda)
+        .with_scl(scl);
+    let mut veml = Veml7700::new(i2c);
 
-    drop(v77);
-    let mut rgb_white_balance: Option<(u16, u16, u16)> = None;
-    let mut rgb_bufs: Option<(
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-    )> = None;
-
-    let mut v33 = get_v33();
-    let has_color = v33.enable().is_ok();
-    init_dev_info(has_color).await;
-
-    if has_color {
-        Timer::after_millis(5).await;
-        rgb_white_balance = Some(take_rgb_white_balance_calibration(&mut v33).await);
-        rgb_bufs = Some((
-            RunningMedianBuffer::new(),
-            RunningMedianBuffer::new(),
-            RunningMedianBuffer::new(),
-        ));
+    loop {
+        match v77::setup(&mut veml).await {
+            Ok(()) => break,
+            Err(e) => {
+                error!(
+                    "VEML7700 setup failed: {:?}, retrying",
+                    defmt::Debug2Format(&e)
+                );
+                Timer::after_millis(1000).await;
+            }
+        }
     }
 
-    let mut lux_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    init_dev_info(true).await;
+
+    // Give the LED task time to come up before driving the measurement LED
+    Timer::after_millis(500).await;
+
+    let mut baselines = optics::take_channel_baselines(&mut veml).await;
+
+    let mut r_als_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let mut r_white_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let mut g_als_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let mut g_white_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let mut b_als_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
+    let mut b_white_buf: RunningMedianBuffer<100> = RunningMedianBuffer::new();
 
     let mut client_connected_sub = unwrap!(CLIENT_CONNECTED.receiver());
     let mut rgb_multi_sub = RGB_MULTIPLIERS_WATCH.anon_receiver();
     let mut settings_sub = SETTINGS_DATA_WATCH.anon_receiver();
     let mut calib_sub = unwrap!(CALIBRATE_REF_CHANNEL.subscriber());
+    let mut black_calib_sub = unwrap!(BLACK_CALIBRATE_CHANNEL.subscriber());
+    let mut black_ref_sub = BLACK_REF_WATCH.anon_receiver();
 
     let mm_data_pub = MEASUREMENT_DATA_WATCH.sender();
+    let mut idle_cycles: u32 = 0;
+    let mut inserted_streak: u32 = 0;
     dev_state_sender.send(MeasurementState::Idle);
 
     loop {
         if !client_connected_sub.get().await {
-            set_led_brightness(0);
+            set_measure_led(MeasureLedCommand::Off);
             client_connected_sub.changed().await;
         }
         let saved_algorithm = settings_sub.try_get().expect("No Settings available").algo;
 
-        let (is_filament_inserted, _) = {
-            let mut v77 = get_v77();
-            is_filament_inserted(&mut v77, v77_baseline_dark, saved_algorithm.threshold).await
+        let (filament_blocked, detect_reading) =
+            optics::is_filament_inserted(&mut veml, &mut baselines, saved_algorithm.threshold)
+                .await;
+        inserted_streak = if filament_blocked {
+            inserted_streak + 1
+        } else {
+            0
         };
+        info!(
+            "Detection: reading={}, baseline={}, streak={}",
+            detect_reading, baselines.detect_baseline, inserted_streak
+        );
 
-        if !is_filament_inserted {
-            lux_buf.clear();
-            if let Some((buf0, buf1, buf2)) = &mut rgb_bufs {
-                buf0.clear();
-                buf1.clear();
-                buf2.clear();
+        if !filament_blocked || inserted_streak < 2 {
+            r_als_buf.clear();
+            r_white_buf.clear();
+            g_als_buf.clear();
+            g_white_buf.clear();
+            b_als_buf.clear();
+            b_white_buf.clear();
+            idle_cycles += 1;
+
+            if idle_cycles >= IDLE_REBASELINE_CYCLES {
+                info!("Re-taking baselines after idle period");
+                idle_cycles = 0;
+                baselines = optics::take_channel_baselines(&mut veml).await;
             }
+
             dev_state_sender.send_if_modified(|v| {
                 let changed = *v != Some(MeasurementState::Idle);
                 *v = Some(MeasurementState::Idle);
@@ -117,7 +136,9 @@ pub async fn sensor_task(
             continue;
         }
 
-        // Filament detected
+        idle_cycles = 0;
+
+        // Filament detected (confirmed twice in a row)
         info!("Filament detected");
         dev_state_sender.send_if_modified(|v| {
             let changed = *v != Some(MeasurementState::FilamentInserted);
@@ -125,170 +146,153 @@ pub async fn sensor_task(
             changed
         });
 
-        set_led_brightness(100);
-        Timer::after_millis(300).await;
+        for cycle in 0..MEASUREMENT_CYCLES {
+            defmt::debug!("Measurement cycle {}", cycle + 1);
+            // Ambient light with the LED off
+            set_measure_led(MeasureLedCommand::Off);
+            Timer::after_millis(v77::SETTLE_MS).await;
+            let ambient = v77::sample_dual_median(&mut veml, 3).await;
 
-        let readings_per_call = 3;
-
-        for i in 0..readings_per_call {
-            // Longer delay to ensure fresh VEML7700 readings
-            if i > 0 {
-                Timer::after_millis(100).await; // Increased from 15ms to 60ms
-            }
-
-            {
-                let mut v77 = get_v77();
-                let lux_reading = v77.read_lux().unwrap_or(0.0);
-                debug!("Raw lux: {}", lux_reading);
-                lux_buf.push(lux_reading);
-            }
-            if has_color {
-                let mut v33 = get_v33();
-                if let (Ok(r), Ok(g), Ok(b), Ok(c)) = (
-                    v33.read_red(),
-                    v33.read_green(),
-                    v33.read_blue(),
-                    v33.read_clear(),
-                ) {
-                    debug!("RGB readings {}: R={}, G={}, B={}, C={}", i + 1, r, g, b, c);
-
-                    let buffers = rgb_bufs.as_mut().unwrap();
-                    buffers.0.push(r as f32);
-                    buffers.1.push(g as f32);
-                    buffers.2.push(b as f32);
-                }
+            let readings = [
+                (
+                    MeasureLedCommand::Rgb(baselines.red_level, 0, 0),
+                    &mut r_als_buf,
+                    &mut r_white_buf,
+                ),
+                (
+                    MeasureLedCommand::Rgb(0, baselines.green_level, 0),
+                    &mut g_als_buf,
+                    &mut g_white_buf,
+                ),
+                (
+                    MeasureLedCommand::Rgb(0, 0, baselines.blue_level),
+                    &mut b_als_buf,
+                    &mut b_white_buf,
+                ),
+            ];
+            for (cmd, als_buf, white_buf) in readings {
+                set_measure_led(cmd);
+                Timer::after_millis(v77::SETTLE_MS).await;
+                let dual = v77::sample_dual_median(&mut veml, 3).await;
+                let net = dual.net(ambient);
+                debug!(
+                    "Cycle {} cmd {:?} net als={}, white={}",
+                    cycle + 1,
+                    cmd,
+                    net.als,
+                    net.white
+                );
+                als_buf.push(net.als);
+                white_buf.push(net.white);
             }
         }
-        let buffer_count = lux_buf.len();
 
-        let final_median_lux = lux_buf.median().unwrap();
+        let spectral = SpectralReadings::from_baseline_levels(
+            DualReading::new(
+                r_als_buf.median().unwrap_or(0.0),
+                r_white_buf.median().unwrap_or(0.0),
+            ),
+            DualReading::new(
+                g_als_buf.median().unwrap_or(0.0),
+                g_white_buf.median().unwrap_or(0.0),
+            ),
+            DualReading::new(
+                b_als_buf.median().unwrap_or(0.0),
+                b_white_buf.median().unwrap_or(0.0),
+            ),
+            &baselines,
+        );
 
-        if !has_color {
-            let td_value = (final_median_lux / v77_baseline_bright) * 10.0;
-            let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
-            mm_data_pub.send(Some(MeasurementData {
-                td: adjusted_td_value,
-                buf_count: Some(buffer_count as u32),
-                hex_color: None,
+        info!(
+            "Ambient-corrected medians: R=({},{}), G=({},{}), B=({},{})",
+            spectral.red.als,
+            spectral.red.white,
+            spectral.green.als,
+            spectral.green.white,
+            spectral.blue.als,
+            spectral.blue.white
+        );
+
+        if let Some(()) = black_calib_sub.try_next_message_pure() {
+            info!(
+                "Black reference captured: R={}, G={}, B={}",
+                spectral.red.white, spectral.green.white, spectral.blue.white
+            );
+            DATA_UPDATE_CHANNEL.publish_immediate(crate::DataUpdate::BlackRef(BlackReference {
+                r: spectral.red.white,
+                g: spectral.green.white,
+                b: spectral.blue.white,
             }));
+            Timer::after_millis(50).await;
         }
-        let rgb_multipliers = rgb_multi_sub
+
+        let black_ref = black_ref_sub
+            .try_get()
+            .expect("No black reference available");
+
+        let mut rgb_multipliers = rgb_multi_sub
             .try_get()
             .expect("No RGB Multipliers available");
-        let rgb_wb = rgb_white_balance.unwrap();
+
+        let prelim = optics::evaluate_measurement(
+            &spectral,
+            &baselines,
+            &black_ref,
+            &saved_algorithm,
+            &rgb_multipliers,
+        );
+
+        // Sanity check: a supposedly inserted filament that transmits
+        // almost everything means the baselines are stale (or detection
+        // misfired). Re-baseline instead of publishing garbage.
+        let t = prelim.transmittance;
+        if (t.0 + t.1 + t.2) / 3.0 > 0.9 {
+            warn!("Measurement looks like an empty slot (T mean > 0.9), re-baselining");
+            baselines = optics::take_channel_baselines(&mut veml).await;
+            mm_data_pub.send_if_modified(|v| {
+                let changed = *v != Some(None);
+                *v = Some(None);
+                changed
+            });
+            continue;
+        }
 
         if let Some(cmd) = calib_sub.try_next_message_pure() {
             info!("Calibration requested");
 
-            let result = auto_calibrate_gray_reference(
+            match auto_calibrate_spectral(
                 cmd,
-                final_median_lux,
-                rgb_bufs.as_mut().unwrap(),
-                rgb_wb,
+                &spectral,
+                &baselines,
+                prelim.raw_td,
                 rgb_multipliers,
-            )
-            .await;
-
-            match result {
+            ) {
                 Ok(cal) => {
                     RGB_MULTIPLIERS_WATCH.sender().send(cal);
+                    rgb_multipliers = cal;
                 }
                 Err(e) => {
-                    info!("Calibration failed: {:?}", Debug2Format(&e));
+                    info!("Calibration failed: {:?}", defmt::Debug2Format(&e));
                 }
             }
         }
 
-        // Do color work from here only
-        let (r_median_raw, g_median_raw, b_median_raw) = {
-            let buffers = rgb_bufs.as_mut().unwrap();
-            (
-                buffers.0.median().unwrap_or(rgb_wb.0 as f32) as u16,
-                buffers.1.median().unwrap_or(rgb_wb.1 as f32) as u16,
-                buffers.2.median().unwrap_or(rgb_wb.2 as f32) as u16,
-            )
-        };
-
-        let spectral_correction = spectral_correction_from_rgb(r_median_raw, g_median_raw);
-
-        let td_value = (final_median_lux / v77_baseline_bright) * spectral_correction * 10.0;
+        let result = optics::evaluate_measurement(
+            &spectral,
+            &baselines,
+            &black_ref,
+            &saved_algorithm,
+            &rgb_multipliers,
+        );
         info!(
-            "td: {}, median lux: {}, baseline_bright: {}, spectral_corr: {}",
-            td_value, final_median_lux, v77_baseline_bright, spectral_correction
+            "td: {} (raw {}), hex: #{}, transmittance: ({}, {}, {})",
+            result.td, result.raw_td, result.hex_color, t.0, t.1, t.2
         );
 
-        let (r_corrected, g_corrected, b_corrected) = apply_spectral_response_correction(
-            r_median_raw,
-            g_median_raw,
-            b_median_raw,
-            rgb_wb.0,
-            rgb_wb.1,
-            rgb_wb.2,
-        );
-
-        // info!(
-        //     "Spectral corrected RGB: ({},{},{})",
-        //     r_corrected, g_corrected, b_corrected
-        // );
-
-        let (r_final, g_final, b_final) = {
-            let multipliers = rgb_multipliers;
-            apply_rgb_multipliers(
-                r_corrected,
-                g_corrected,
-                b_corrected,
-                final_median_lux,
-                &multipliers,
-            )
-        };
-
-        let mut hex_color: String<6> = String::new();
-        write!(
-            &mut hex_color,
-            "{:02X}{:02X}{:02X}",
-            r_final, g_final, b_final
-        )
-        .unwrap();
-
-        let adjusted_td_value = saved_algorithm.m * td_value + saved_algorithm.b;
         mm_data_pub.send(Some(MeasurementData {
-            td: adjusted_td_value,
-            buf_count: Some(buffer_count as u32),
-            hex_color: Some(hex_color),
+            td: result.td,
+            buf_count: Some(r_white_buf.len() as u32),
+            hex_color: Some(result.hex_color),
         }));
     }
-}
-
-fn get_i2c<'d>() -> I2c<'d, Blocking> {
-    I2c::new(
-        unsafe { peripherals::I2C0::steal() },
-        Config::default().with_frequency(Rate::from_khz(100)),
-    )
-    .unwrap()
-}
-
-fn get_v33<'d>() -> VEML3328<'d> {
-    let i2c = get_i2c().with_sda(v33_sda()).with_scl(v33_scl());
-    VEML3328::new(i2c)
-}
-
-fn get_v77<'d>() -> Veml7700<I2c<'d, Blocking>> {
-    let i2c = get_i2c().with_sda(v77_sda()).with_scl(v77_scl());
-    Veml7700::new(i2c)
-}
-
-fn v77_sda() -> peripherals::GPIO6<'static> {
-    unsafe { peripherals::GPIO6::steal() }
-}
-
-fn v77_scl() -> peripherals::GPIO5<'static> {
-    unsafe { peripherals::GPIO5::steal() }
-}
-
-fn v33_sda() -> peripherals::GPIO8<'static> {
-    unsafe { peripherals::GPIO8::steal() }
-}
-
-fn v33_scl() -> peripherals::GPIO10<'static> {
-    unsafe { peripherals::GPIO10::steal() }
 }

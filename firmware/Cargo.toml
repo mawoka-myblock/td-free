@@ -8,6 +8,10 @@ version      = "0.1.0"
 name = "firmware"
 path = "./src/bin/main.rs"
 
+[[bin]]
+name = "data_logger"
+path = "./src/bin/data_logger.rs"
+
 [dependencies]
 esp-hal = { version = "~1.1.0", features = ["defmt", "esp32c3", "unstable"] }
 
@@ -104,15 +108,4 @@ postcard = { version = "1.1" }
 
 thiserror = { version = "2", default-features = false }
 
-
-# For fine tuning these settings, please refer to https://doc.rust-lang.org/cargo/reference/profiles.html
-[profile.dev]
-# The default debug profile is too slow and too big for resource-constrained devices.
-# Always build with some optimizations enabled.
-opt-level = "s"
-
-[profile.release]
-codegen-units = 1     # LLVM can perform better optimizations using a single thread
-debug         = 2     # prefer slower builds but better debugging experience
-lto           = 'fat'
-opt-level     = 's'
+td-calc = { path = "../td-calc", default-features = false, features = ["defmt"] }

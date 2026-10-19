@@ -40,7 +40,10 @@ Sets/Gets settings:
     "algo": {
         "b": 0.0,
         "m": 1.0,
-        "threshold": 0.9 // between 0.999 and 0.001
+        "threshold": 0.9, // between 0.999 and 0.001
+        "wr": 1.0, // red channel weight for td
+        "wg": 1.0, // green channel weight for td
+        "wb": 1.0 // blue channel weight for td
     }
 }
 ```
@@ -92,3 +95,25 @@ may throw 408 if internal function timeouted
 ```
 
 Return RGBMultipliers like `/config/rgb`
+
+### POST /config/black-calibrate Capture black reference
+Captures the per-channel dark reference with an **opaque black filament inserted**.
+It compensates light leaking around the filament, which would otherwise be
+reported as transmission. The reference is persisted and subtracted from all
+future measurements.
+
+Need client listening to server sent events (`/events/data`)
+
+may throw 428 if no client connected
+
+may throw 408 if no measurement was taken in time (insert the black filament)
+
+Returns the stored black reference:
+
+```json
+{
+    "r": 48.0,
+    "g": 44.5,
+    "b": 169.0
+}
+```

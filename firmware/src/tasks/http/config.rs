@@ -9,10 +9,10 @@ use picoserve::{
 };
 
 use crate::{
-    CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED, DATA_UPDATE_CHANNEL, DEVICE_INFO_WATCH,
-    RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
+    BLACK_CALIBRATE_CHANNEL, BLACK_REF_WATCH, CALIBRATE_REF_CHANNEL, CLIENT_CONNECTED,
+    DATA_UPDATE_CHANNEL, DEVICE_INFO_WATCH, RGB_MULTIPLIERS_WATCH, SETTINGS_DATA_WATCH,
     helpers::{
-        RGBMultipliers,
+        BlackReference, RGBMultipliers,
         calibration::CalibrationCommand,
         storage::{Settings, WifiCreds},
     },
@@ -27,6 +27,7 @@ pub fn config_router() -> picoserve::Router<impl picoserve::routing::PathRouter<
         .route("/wifi", post(set_wifi_creds))
         .route("/info", get(get_device_info))
         .route("/auto-calibrate", post(set_auto_calibrate))
+        .route("/black-calibrate", post(set_black_calibrate))
 }
 
 async fn get_settings() -> impl IntoResponse {
@@ -90,5 +91,35 @@ async fn set_auto_calibrate<'a>(
             // timeout occurred
             Err((StatusCode::REQUEST_TIMEOUT, "fn timeouted"))
         }
+    };
+}
+
+/// Capture the dark reference: insert a fully opaque filament, then call.
+/// The current per-channel readings are stored and subtracted from all
+/// future measurements (compensates light leaking around the filament).
+async fn set_black_calibrate<'a>(
+) -> Result<response::Json<BlackReference>, (StatusCode, &'a str)> {
+    let client_connected = CLIENT_CONNECTED.try_get().unwrap_or(false);
+    if !client_connected {
+        return Err((
+            StatusCode::PRECONDITION_REQUIRED,
+            "client needs to be listening and connected",
+        ));
+    }
+
+    BLACK_CALIBRATE_CHANNEL.publish_immediate(());
+    let mut black_ref_recv = BLACK_REF_WATCH.anon_receiver();
+    let changed_fut = async {
+        loop {
+            if let Some(d) = black_ref_recv.try_changed() {
+                return d;
+            }
+            Timer::after_millis(50).await
+        }
+    };
+    let timeout_fut = Timer::after_secs(15);
+    return match select(changed_fut, timeout_fut).await {
+        Either::First(d) => Ok(response::Json(d)),
+        Either::Second(_) => Err((StatusCode::REQUEST_TIMEOUT, "fn timeouted")),
     };
 }

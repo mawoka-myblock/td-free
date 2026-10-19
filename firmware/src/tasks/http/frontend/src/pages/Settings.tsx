@@ -9,6 +9,9 @@ type Settings = {
 		b: number;
 		m: number;
 		threshold: number;
+		wr: number;
+		wg: number;
+		wb: number;
 	};
 };
 
@@ -27,6 +30,9 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 			b: 0,
 			m: 1,
 			threshold: 0.9,
+			wr: 1,
+			wg: 1,
+			wb: 1,
 		},
 	});
 
@@ -47,6 +53,9 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 							b: round(data.algo.b),
 							m: round(data.algo.m),
 							threshold: round(data.algo.threshold, 3),
+							wr: round(data.algo.wr ?? 1, 2),
+							wg: round(data.algo.wg ?? 1, 2),
+							wb: round(data.algo.wb ?? 1, 2),
 						},
 					});
 				}
@@ -90,6 +99,9 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 				b: round(settings.algo.b),
 				m: round(settings.algo.m),
 				threshold: round(settings.algo.threshold, 6),
+				wr: round(settings.algo.wr, 2),
+				wg: round(settings.algo.wg, 2),
+				wb: round(settings.algo.wb, 2),
 			},
 		};
 
@@ -168,24 +180,55 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 					/>
 				</div>
 
-				{/* threshold */}
-				<div class="flex flex-col mx-auto lg:w-2/3 w-full">
-					<label htmlFor="threshold">Threshold (0.001 - 0.999)</label>
-					<input
-						type="number"
-						step="0.001"
-						min={0.001}
-						max={0.999}
-						value={settings.algo.threshold}
-						onInput={(e) =>
-							updateField(
-								["algo", "threshold"],
-								Number((e.target as HTMLInputElement).value),
-							)
-						}
-						class="p-2 rounded shadow-lg invalid:border-red-400"
-					/>
+			{/* threshold */}
+			<div class="flex flex-col mx-auto lg:w-2/3 w-full">
+				<label htmlFor="threshold">Threshold (0.001 - 0.999)</label>
+				<input
+					type="number"
+					step="0.001"
+					min={0.001}
+					max={0.999}
+					value={settings.algo.threshold}
+					onInput={(e) =>
+						updateField(
+							["algo", "threshold"],
+							Number((e.target as HTMLInputElement).value),
+						)
+					}
+					class="p-2 rounded shadow-lg invalid:border-red-400"
+				/>
+			</div>
+
+			{/* channel weights */}
+			<div class="flex flex-col mx-auto lg:w-2/3 w-full gap-2">
+				<label>Channel weights (td)</label>
+				<div class="flex gap-2">
+					{(["wr", "wg", "wb"] as const).map((key) => (
+						<input
+							key={key}
+							type="number"
+							step="0.1"
+							min={0}
+							max={10}
+							aria-label={key}
+							value={settings.algo[key]}
+							onInput={(e) =>
+								updateField(
+									["algo", key],
+									Number((e.target as HTMLInputElement).value),
+								)
+							}
+							class="p-2 rounded shadow-lg w-full invalid:border-red-400"
+						/>
+					))}
 				</div>
+				<p class="text-xs text-text-secondary">
+					Relative weight of the red/green/blue channel in the td
+					calculation. Lower a weight to reduce that channel's
+					influence, e.g. a low blue weight suppresses scattered
+					light on strongly scattering filaments.
+				</p>
+			</div>
 
 				<div class="lg:w-2/3 w-full mx-auto">
 					<Button type="submit" disabled={!isValid}>
