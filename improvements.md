@@ -1,15 +1,15 @@
 # Accuracy improvements
 
-This fork changes how the Td-Free measures TD and color. Measured on one device against four Polymaker
+These changes improve how the Td-Free measures TD and color. Measured on one device against four Polymaker
 spools, the average TD error went from **47% to 12%** and the average color error from **ΔE 59 to 10**.
 This document lists what was changed, why, and what each step did to the results.
 
 All measurements were taken on 23 and 24 October 2026 with one Td-Free (ESP32-C3, VEML7700 light sensor,
-VEML3328 color sensor, cold-white COB lamp, WS2812 status LED), starting from upstream commit `5e67e73`.
+VEML3328 color sensor, cold-white COB lamp, WS2812 status LED), starting from commit `5e67e73`.
 
 ## Results at a glance
 
-| | Stock firmware | This fork |
+| | Stock firmware | With these changes |
 |---|---|---|
 | Average TD error to the spool label | 47% | 12% |
 | Worst TD error | 56% (yellow, natural) | 24% (cyan) |
