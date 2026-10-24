@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::helpers::{
     RGBMultipliers,
-    calibration::CalibrationCommand,
+    calibration::{CalibrationCommand, ColorReferences},
     storage::{Settings, WifiCreds, nvs::Nvs},
 };
 
@@ -64,7 +64,8 @@ where
     S: serde::Serializer,
 {
     let mut s: String<4> = String::new();
-    write!(&mut s, "{:.1}", value).unwrap();
+    // only -9.9 to 99.9 fit into the 4 characters, anything else would panic here
+    write!(&mut s, "{:.1}", value.clamp(-9.9, 99.9)).unwrap();
     serializer.serialize_str(&s)
 }
 
@@ -75,6 +76,10 @@ pub static SETTINGS_DATA_WATCH: Watch<CriticalSectionRawMutex, Settings, 1> = Wa
 
 pub static RGB_MULTIPLIERS_WATCH: Watch<CriticalSectionRawMutex, RGBMultipliers, 1> = Watch::new();
 
+/// Filaments with a known color, the color correction is fitted to them
+pub static COLOR_REFERENCES_WATCH: Watch<CriticalSectionRawMutex, ColorReferences, 1> =
+    Watch::new();
+
 pub type NvsMutex = Mutex<CriticalSectionRawMutex, Nvs>;
 pub const NVS_OFFSET: usize = 0x9000;
 pub const NVS_SIZE: usize = 0x6000;
@@ -83,6 +88,7 @@ pub const NVS_SIZE: usize = 0x6000;
 pub enum DataUpdate {
     Settings(Settings),
     RgbMulti(RGBMultipliers),
+    ColorReferences(ColorReferences),
     Wifi(WifiCreds),
 }
 

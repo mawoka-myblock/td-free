@@ -25,6 +25,8 @@ export function ColorPickerModal({
 	const [r, setR] = useState(initial.r);
 	const [g, setG] = useState(initial.g);
 	const [b, setB] = useState(initial.b);
+	// What is currently typed into the hex field, null while it isn't being edited
+	const [hexDraft, setHexDraft] = useState<string | null>(null);
 	const hex = toHex(r, g, b);
 
 	function fromNative(h: string) {
@@ -43,6 +45,10 @@ export function ColorPickerModal({
 				<h2 class="font-sans text-base font-600 text-text m-0">
 					Target color
 				</h2>
+				<p class="text-xs text-text-secondary m-0">
+					Enter the hex color of the filament that is in the
+					chamber, for example from its spool label.
+				</p>
 
 				<div class="flex items-center gap-3">
 					<div
@@ -61,9 +67,21 @@ export function ColorPickerModal({
 							fromNative((e.target as HTMLInputElement).value)
 						}
 					/>
-					<span class="font-mono text-sm text-text-secondary">
-						{hex}
-					</span>
+					<input
+						type="text"
+						maxLength={7}
+						spellcheck={false}
+						placeholder="#RRGGBB"
+						aria-label="Hex color"
+						value={hexDraft ?? hex}
+						class="w-24 font-mono text-sm uppercase border border-border-secondary rounded-md px-2 py-1 bg-bg-secondary"
+						onInput={(e) => {
+							const value = (e.target as HTMLInputElement).value;
+							setHexDraft(value);
+							if (/^#?[0-9a-fA-F]{6}$/.test(value)) fromNative(value);
+						}}
+						onBlur={() => setHexDraft(null)}
+					/>
 				</div>
 
 				<div class="flex flex-col gap-1">

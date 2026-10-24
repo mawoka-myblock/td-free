@@ -74,16 +74,17 @@ pub async fn rgb_led_task(rmt_per: RMT<'static>, p4: GPIO4<'static>) {
 
 fn resolve_color(wifi: WifiState, measurement: MeasurementState, client: bool) -> RGB8 {
     match (wifi, measurement) {
-        (_, MeasurementState::Warmup) => RGB8::new(255, 255, 0),
+        // The light sensors pick up stray light from this LED, so it stays dark whenever the
+        // baseline is taken (warmup) or a filament is measured. Both have to happen in the same
+        // state, otherwise the baseline doesn't match the measurement.
+        (_, MeasurementState::Warmup | MeasurementState::FilamentInserted) => RGB8::new(0, 0, 0),
 
-        // HotSpot mode — show measurement state + client presence
-        (WifiState::HotSpotRunning, MeasurementState::FilamentInserted) => RGB8::new(0, 255, 255),
+        // HotSpot mode — show client presence
         (WifiState::HotSpotRunning, MeasurementState::Idle) if client => RGB8::new(255, 0, 255),
         (WifiState::HotSpotRunning, MeasurementState::Idle) => RGB8::new(180, 0, 180),
 
         // WiFi path
-        (WifiState::Connecting, _) => RGB8::new(0, 0, 255),
-        (WifiState::Connected, MeasurementState::FilamentInserted) => RGB8::new(0, 255, 255),
+        (WifiState::Connecting, MeasurementState::Idle) => RGB8::new(0, 0, 255),
         (WifiState::Connected, MeasurementState::Idle) if client => RGB8::new(0, 255, 0),
         (WifiState::Connected, MeasurementState::Idle) => RGB8::new(0, 180, 0),
     }

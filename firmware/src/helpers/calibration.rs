@@ -1,10 +1,7 @@
-use defmt::{Format, debug, info};
-use heapless::Vec;
-use micromath::F32Ext;
+use defmt::Format;
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::{RGBMultipliers, median_buffer::RunningMedianBuffer};
-
+/// Adds the inserted filament as a color reference with this color
 #[derive(Debug, Format, Clone, Copy, Deserialize, Serialize)]
 pub struct CalibrationCommand {
     pub target_r: u8,
@@ -12,503 +9,174 @@ pub struct CalibrationCommand {
     pub target_b: u8,
 }
 
-#[derive(Debug, Format)]
-pub enum AutoCalibrateError {
-    RgbBufferEmpty,
+#[derive(Debug, Format, Clone, Copy, Deserialize, Serialize)]
+pub struct RemoveReferenceCommand {
+    pub index: u8,
 }
 
-pub async fn auto_calibrate_gray_reference(
-    command_data: CalibrationCommand,
-    final_median_lux: f32,
-    rgb_bufs: &(
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-        RunningMedianBuffer<100>,
-    ),
-    rgb_wb: (u16, u16, u16),
-    mut rgb_multipliers: RGBMultipliers,
-) -> Result<RGBMultipliers, AutoCalibrateError> {
-    info!("Starting optimization-based color calibration...");
+pub const MAX_COLOR_REFERENCES: usize = 8;
 
-    info!(
-        "Calibrating to target color: RGB({}, {}, {})",
-        command_data.target_r, command_data.target_g, command_data.target_b
-    );
+/// A filament with a known color: what the sensor measured and what it should show.
+#[derive(Debug, Format, Clone, Copy, PartialEq, Deserialize, Serialize)]
+pub struct ColorReference {
+    /// White balanced sensor color, see `white_balanced`
+    pub measured: [f32; 3],
+    /// sRGB color printed on the spool
+    pub target: [u8; 3],
+}
 
-    // Take current RAW median reading from the buffers
-    let (current_r, current_g, current_b) = (
-        rgb_bufs.0.median().unwrap_or(0.0),
-        rgb_bufs.1.median().unwrap_or(0.0),
-        rgb_bufs.2.median().unwrap_or(0.0),
-    );
+#[derive(Debug, Format, Clone, Default, PartialEq, Deserialize, Serialize)]
+pub struct ColorReferences {
+    pub references: heapless::Vec<ColorReference, MAX_COLOR_REFERENCES>,
+}
 
-    if current_r == 0.0 && current_g == 0.0 && current_b == 0.0 {
-        return Err(AutoCalibrateError::RgbBufferEmpty);
+/// One reference as the calibration page shows it
+#[derive(Debug, Clone, Copy, Serialize)]
+pub struct ColorReferenceView {
+    pub target: [u8; 3],
+    /// Color with the white balance only, without correction
+    pub measured: [u8; 3],
+    /// Color the device shows now, with the correction from all references
+    pub corrected: [u8; 3],
+}
+
+/// Maps the white balanced sensor color (linear light) to the displayed color (linear light)
+pub type ColorMatrix = [[f32; 3]; 3];
+
+const IDENTITY: ColorMatrix = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+/// Pulls the full fit towards the per-channel solution. With only a few references a free 3x3
+/// fit overfits: tested on four Panchroma spools, a spool left out of the fit was off by ΔE 32
+/// without it and ΔE 22 with it, while the fitted spools stayed at ΔE 8.
+const RIDGE: f32 = 0.025;
+
+/// Scales the raw sensor channels so that the empty chamber (`wb`, measured at power-up) reads
+/// the same on all three, the lamp is white by definition.
+///
+/// Bright filaments are then scaled so the strongest channel is 1, which keeps only their hue:
+/// a translucent filament looks bright although it lets through only a few percent of the light.
+/// Very dark filaments keep their brightness.
+pub fn white_balanced(raw: (u16, u16, u16), wb: (u16, u16, u16)) -> [f32; 3] {
+    let raw = [raw.0 as f32, raw.1 as f32, raw.2 as f32];
+    let wb = [wb.0 as f32, wb.1 as f32, wb.2 as f32];
+    if wb.iter().any(|&w| w <= 0.0) {
+        return [0.5; 3];
     }
-
-    info!(
-        "Current raw median readings: R={}, G={}, B={}",
-        current_r, current_g, current_b
-    );
-
-    // Get current multipliers as starting point for optimization
-
-    //set the current multiplier td to lux. TODO: Rename this field
-    rgb_multipliers.td_reference = final_median_lux;
-
-    info!(
-        "Starting optimization from current multipliers: R={}, G={}, B={}, Brightness={}",
-        rgb_multipliers.red,
-        rgb_multipliers.green,
-        rgb_multipliers.blue,
-        rgb_multipliers.brightness
-    );
-
-    // Step 1: Optimize brightness to minimize overall RGB distance
-    let optimized_brightness = optimize_brightness(
-        (current_r as u16, current_g as u16, current_b as u16),
-        (
-            command_data.target_r,
-            command_data.target_g,
-            command_data.target_b,
-        ),
-        rgb_wb,
-        final_median_lux,
-        rgb_multipliers,
-        100,
-    );
-
-    rgb_multipliers.brightness = optimized_brightness;
-
-    // Step 2: Fine-tune individual RGB channels
-    let (optimized_red, optimized_green, optimized_blue) = optimize_rgb_channels(
-        (current_r as u16, current_g as u16, current_b as u16),
-        (
-            command_data.target_r,
-            command_data.target_g,
-            command_data.target_b,
-        ),
-        rgb_wb,
-        final_median_lux,
-        rgb_multipliers,
-        100,
-    );
-
-    rgb_multipliers.red = optimized_red;
-    rgb_multipliers.green = optimized_green;
-    rgb_multipliers.blue = optimized_blue;
-
-    info!(
-        "Optimization result: R={}, G={}, B={}, Brightness={}",
-        optimized_red, optimized_green, optimized_blue, optimized_brightness
-    );
-
-    // Verify the optimization result
-    let verify_result = apply_complete_color_correction(
-        (current_r, current_g, current_b).0 as u16,
-        (current_r, current_g, current_b).1 as u16,
-        (current_r, current_g, current_b).2 as u16,
-        rgb_wb,
-        final_median_lux,
-        &rgb_multipliers,
-    );
-
-    info!(
-        "Verification - Target: RGB({},{},{}), Optimized result: RGB({},{},{})",
-        command_data.target_r,
-        command_data.target_g,
-        command_data.target_b,
-        verify_result.0,
-        verify_result.1,
-        verify_result.2
-    );
-
-    // Set the multipliers with the optimized values
-    let new_multipliers = RGBMultipliers {
-        red: optimized_red,
-        green: optimized_green,
-        blue: optimized_blue,
-        brightness: optimized_brightness,
-        td_reference: final_median_lux, // Not used for normalization anymore, but keep for compatibility
-        reference_r: command_data.target_r,
-        reference_g: command_data.target_g,
-        reference_b: command_data.target_b,
-    };
-
-    info!(
-        "Setting new TD reference: {} (was {})",
-        final_median_lux, rgb_multipliers.td_reference
-    );
-
-    // Update the in-memory multipliers
-    Ok(new_multipliers)
+    let total = wb[0] + wb[1] + wb[2];
+    let balanced = [0, 1, 2].map(|i| raw[i] * total / (3.0 * wb[i]));
+    let max = balanced[0].max(balanced[1]).max(balanced[2]);
+    let scale = if max > 255.0 { 1.0 / max } else { 1.0 / 255.0 };
+    balanced.map(|v| v * scale)
 }
 
-pub fn optimize_brightness(
-    raw_color: (u16, u16, u16),
-    target_color: (u8, u8, u8),
-    white_balance: (u16, u16, u16),
-    current_lux: f32,
-    mut multipliers: RGBMultipliers,
-    max_iterations: usize,
-) -> f32 {
-    let mut best_brightness = multipliers.brightness;
+/// Fits the color matrix to the references. No reference: the white balance only. One or two:
+/// a factor per channel (the white point). Three or more: a full 3x3 matrix, which also corrects
+/// how the channels bleed into each other.
+pub fn fit_color_matrix(references: &[ColorReference]) -> ColorMatrix {
+    if references.is_empty() {
+        return IDENTITY;
+    }
+    let targets: heapless::Vec<[f32; 3], MAX_COLOR_REFERENCES> = references
+        .iter()
+        .map(|r| r.target.map(srgb_to_linear))
+        .collect();
 
-    // Current distance
-    let current_result = apply_complete_color_correction(
-        raw_color.0,
-        raw_color.1,
-        raw_color.2,
-        white_balance,
-        current_lux,
-        &multipliers,
-    );
-    let mut current_distance = calculate_rgb_distance(current_result, target_color);
-    let mut best_distance = current_distance;
-
-    info!(
-        "Brightness optimization start: brightness={}, distance={}",
-        multipliers.brightness, current_distance
-    );
-
-    let step_size = 0.02; // 5% steps
-    let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
-
-    for iteration in 0..max_iterations {
-        let mut improved = false;
-
-        // Try both directions if we don't know the direction yet
-        let mut directions: Vec<f32, 2> = Vec::new();
-
-        if step_direction == 0 {
-            let _ = directions.push(1.0);
-            let _ = directions.push(-1.0);
-        } else {
-            let _ = directions.push(step_direction as f32);
+    let mut matrix = [[0.0; 3]; 3];
+    for ch in 0..3 {
+        // per-channel factor, least squares
+        let (sxy, sxx) = references
+            .iter()
+            .zip(&targets)
+            .fold((0.0, 0.0), |(sxy, sxx), (r, t)| {
+                (
+                    sxy + r.measured[ch] * t[ch],
+                    sxx + r.measured[ch] * r.measured[ch],
+                )
+            });
+        let per_channel = if sxx > 0.0 { sxy / sxx } else { 1.0 };
+        matrix[ch][ch] = per_channel;
+        if references.len() < 3 {
+            continue;
         }
 
-        for &direction in &directions {
-            let test_brightness = (multipliers.brightness + direction * step_size).clamp(0.1, 3.0);
-
-            let mut test_multipliers = multipliers;
-            test_multipliers.brightness = test_brightness;
-
-            let test_result = apply_complete_color_correction(
-                raw_color.0,
-                raw_color.1,
-                raw_color.2,
-                white_balance,
-                current_lux,
-                &test_multipliers,
-            );
-
-            let test_distance = calculate_rgb_distance(test_result, target_color);
-
-            if test_distance < best_distance {
-                best_distance = test_distance;
-                best_brightness = test_brightness;
-                step_direction = direction as i32;
-                improved = true;
-
-                debug!(
-                    "Brightness iter {}: {} -> distance {} (improved)",
-                    iteration, test_brightness, test_distance
-                );
-                break;
+        // full row: least squares with a ridge towards the per-channel factor
+        let mut ata = [[0.0; 3]; 3];
+        let mut atb = [0.0; 3];
+        for (r, t) in references.iter().zip(&targets) {
+            for i in 0..3 {
+                atb[i] += r.measured[i] * t[ch];
+                for j in 0..3 {
+                    ata[i][j] += r.measured[i] * r.measured[j];
+                }
             }
         }
-
-        if improved {
-            multipliers.brightness = best_brightness;
-            current_distance = best_distance;
-        } else {
-            // No improvement found, stop
-            break;
+        for (i, row) in ata.iter_mut().enumerate() {
+            row[i] += RIDGE;
+        }
+        atb[ch] += RIDGE * per_channel;
+        if let Some(row) = solve3(ata, atb) {
+            matrix[ch] = row;
         }
     }
-
-    info!(
-        "Brightness optimization complete: {} -> {}, distance: {} -> {}",
-        multipliers.brightness, best_brightness, current_distance, best_distance
-    );
-
-    best_brightness
+    matrix
 }
 
-pub fn apply_spectral_response_correction(
-    r: u16,
-    g: u16,
-    b: u16,
-    wb_r: u16,
-    wb_g: u16,
-    wb_b: u16,
-) -> (u8, u8, u8) {
-    // Calculate relative sensitivities from white balance calibration
-    let total_wb = wb_r as f32 + wb_g as f32 + wb_b as f32;
-    if total_wb == 0.0 {
-        return (128, 128, 128); // Gray fallback
-    }
+pub fn correct_color(measured: [f32; 3], matrix: &ColorMatrix) -> [u8; 3] {
+    matrix.map(|row| {
+        linear_to_srgb(row[0] * measured[0] + row[1] * measured[1] + row[2] * measured[2])
+    })
+}
 
-    // Normalize white balance values to get relative channel sensitivities
-    let wb_r_norm = wb_r as f32 / total_wb;
-    let wb_g_norm = wb_g as f32 / total_wb;
-    let wb_b_norm = wb_b as f32 / total_wb;
+pub fn reference_views(
+    references: &[ColorReference],
+) -> heapless::Vec<ColorReferenceView, MAX_COLOR_REFERENCES> {
+    let matrix = fit_color_matrix(references);
+    references
+        .iter()
+        .map(|r| ColorReferenceView {
+            target: r.target,
+            measured: correct_color(r.measured, &IDENTITY),
+            corrected: correct_color(r.measured, &matrix),
+        })
+        .collect()
+}
 
-    // Calculate correction factors - use green as reference (typically most stable)
-    let target_balance = 1.0 / 3.0; // Equal RGB in white light
-    let r_correction = target_balance / wb_r_norm;
-    let g_correction = target_balance / wb_g_norm;
-    let b_correction = target_balance / wb_b_norm;
-
-    // Apply spectral response correction
-    let r_corrected = (r as f32 * r_correction).round();
-    let g_corrected = (g as f32 * g_correction).round();
-    let b_corrected = (b as f32 * b_correction).round();
-
-    // Find maximum to normalize to 0-255 range
-    let max_corrected = r_corrected.max(g_corrected).max(b_corrected);
-    let (r_final, g_final, b_final) = if max_corrected > 255.0 {
-        let scale = 255.0 / max_corrected;
-        (
-            (r_corrected * scale).round().clamp(0.0, 255.0) as u8,
-            (g_corrected * scale).round().clamp(0.0, 255.0) as u8,
-            (b_corrected * scale).round().clamp(0.0, 255.0) as u8,
-        )
+fn srgb_to_linear(v: u8) -> f32 {
+    let c = v as f32 / 255.0;
+    if c <= 0.04045 {
+        c / 12.92
     } else {
-        (
-            r_corrected.clamp(0.0, 255.0) as u8,
-            g_corrected.clamp(0.0, 255.0) as u8,
-            b_corrected.clamp(0.0, 255.0) as u8,
-        )
-    };
-
-    info!(
-        "Spectral correction: Raw({},{},{}) -> WB factors({},{},{}) -> Final({},{},{})",
-        r, g, b, r_correction, g_correction, b_correction, r_final, g_final, b_final
-    );
-
-    (r_final, g_final, b_final)
-}
-
-fn calculate_rgb_distance(color1: (u8, u8, u8), color2: (u8, u8, u8)) -> f32 {
-    let dr = color1.0 as f32 - color2.0 as f32;
-    let dg = color1.1 as f32 - color2.1 as f32;
-    let db = color1.2 as f32 - color2.2 as f32;
-    (dr * dr + dg * dg + db * db).sqrt()
-}
-
-fn apply_complete_color_correction(
-    raw_r: u16,
-    raw_g: u16,
-    raw_b: u16,
-    white_balance: (u16, u16, u16),
-    current_lux: f32,
-    multipliers: &RGBMultipliers,
-) -> (u8, u8, u8) {
-    // Step 1: Apply spectral response correction
-    let (corrected_r, corrected_g, corrected_b) = apply_spectral_response_correction(
-        raw_r,
-        raw_g,
-        raw_b,
-        white_balance.0,
-        white_balance.1,
-        white_balance.2,
-    );
-
-    // Step 2: Apply RGB multipliers with lux-based brightness normalization
-    apply_rgb_multipliers(
-        corrected_r,
-        corrected_g,
-        corrected_b,
-        current_lux,
-        multipliers,
-    )
-}
-
-pub fn apply_rgb_multipliers(
-    r: u8,
-    g: u8,
-    b: u8,
-    current_lux: f32,
-    multipliers: &RGBMultipliers,
-) -> (u8, u8, u8) {
-    // Avoid division by zero
-    let safe_current_lux = current_lux.max(1.0);
-
-    // Calculate normalization factor to reach target lux
-    let normalization_factor = (safe_current_lux / multipliers.td_reference).clamp(0.01, 10.0);
-
-    //hardcoded multipliers that work as a good baseline
-    let r_baseline = 0.85;
-    let g_baseline = 0.93;
-    let b_baseline = 1.26;
-    let brightness_baseline = 1.15;
-
-    // Apply color multipliers
-    let r_color_corrected = r as f32 * multipliers.red * r_baseline;
-    let g_color_corrected = g as f32 * multipliers.green * g_baseline;
-    let b_color_corrected = b as f32 * multipliers.blue * b_baseline;
-
-    // Apply total brightness (user brightness * normalization)
-    let total_brightness = multipliers.brightness * normalization_factor * brightness_baseline;
-
-    let r_final = (r_color_corrected * total_brightness)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-    let g_final = (g_color_corrected * total_brightness)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-    let b_final = (b_color_corrected * total_brightness)
-        .round()
-        .clamp(0.0, 255.0) as u8;
-
-    info!(
-        "Lux-normalized correction: ({},{},{}) * Color({},{},{}) * Brightness({}) * Norm({}) = ({},{},{})",
-        r,
-        g,
-        b,
-        multipliers.red,
-        multipliers.green,
-        multipliers.blue,
-        multipliers.brightness,
-        normalization_factor,
-        r_final,
-        g_final,
-        b_final
-    );
-
-    (r_final, g_final, b_final)
-}
-
-pub fn optimize_rgb_channels(
-    raw_color: (u16, u16, u16),
-    target_color: (u8, u8, u8),
-    white_balance: (u16, u16, u16),
-    current_lux: f32,
-    mut multipliers: RGBMultipliers,
-    max_iterations: usize,
-) -> (f32, f32, f32) {
-    let step_size = 0.01; // 2% steps for fine-tuning
-
-    // Optimize each channel independently
-    let channels = ["red", "green", "blue"];
-
-    for channel in &channels {
-        let mut best_value = match *channel {
-            "red" => multipliers.red,
-            "green" => multipliers.green,
-            "blue" => multipliers.blue,
-            _ => 1.0,
-        };
-
-        let target_channel_value = match *channel {
-            "red" => target_color.0,
-            "green" => target_color.1,
-            "blue" => target_color.2,
-            _ => 127,
-        };
-
-        let mut step_direction = 0; // 0=unknown, 1=increase, -1=decrease
-
-        // Get initial channel distance
-        let initial_result = apply_complete_color_correction(
-            raw_color.0,
-            raw_color.1,
-            raw_color.2,
-            white_balance,
-            current_lux,
-            &multipliers,
-        );
-
-        let initial_channel_value = match *channel {
-            "red" => initial_result.0,
-            "green" => initial_result.1,
-            "blue" => initial_result.2,
-            _ => 127,
-        };
-
-        let mut best_channel_distance =
-            (initial_channel_value as f32 - target_channel_value as f32).abs();
-
-        info!(
-            "{} channel optimization start: multiplier={}, current={}, target={}, distance={}",
-            channel, best_value, initial_channel_value, target_channel_value, best_channel_distance
-        );
-
-        for iteration in 0..max_iterations {
-            let mut improved = false;
-
-            let mut directions: Vec<f32, 2> = Vec::new();
-
-            if step_direction == 0 {
-                let _ = directions.push(1.0);
-                let _ = directions.push(-1.0);
-            } else {
-                let _ = directions.push(step_direction as f32);
-            }
-
-            for &direction in &directions {
-                let test_value = (best_value + direction * step_size).clamp(0.5, 2.0);
-
-                let mut test_multipliers = multipliers;
-                match *channel {
-                    "red" => test_multipliers.red = test_value,
-                    "green" => test_multipliers.green = test_value,
-                    "blue" => test_multipliers.blue = test_value,
-                    _ => {}
-                }
-
-                let test_result = apply_complete_color_correction(
-                    raw_color.0,
-                    raw_color.1,
-                    raw_color.2,
-                    white_balance,
-                    current_lux,
-                    &test_multipliers,
-                );
-
-                let test_channel_value = match *channel {
-                    "red" => test_result.0,
-                    "green" => test_result.1,
-                    "blue" => test_result.2,
-                    _ => 127,
-                };
-
-                let test_channel_distance =
-                    (test_channel_value as f32 - target_channel_value as f32).abs();
-
-                if test_channel_distance < best_channel_distance {
-                    best_channel_distance = test_channel_distance;
-                    best_value = test_value;
-                    step_direction = direction as i32;
-                    improved = true;
-
-                    debug!(
-                        "{} iter {}: {} -> value {} distance {} (improved)",
-                        channel, iteration, test_value, test_channel_value, test_channel_distance
-                    );
-                    break;
-                }
-            }
-
-            if improved {
-                match *channel {
-                    "red" => multipliers.red = best_value,
-                    "green" => multipliers.green = best_value,
-                    "blue" => multipliers.blue = best_value,
-                    _ => {}
-                }
-            } else {
-                // No improvement found for this channel, move to next
-                break;
-            }
-        }
-
-        info!(
-            "{} channel optimization complete: {}, distance: {}",
-            channel, best_value, best_channel_distance
-        );
+        libm::powf((c + 0.055) / 1.055, 2.4)
     }
+}
 
-    (multipliers.red, multipliers.green, multipliers.blue)
+fn linear_to_srgb(v: f32) -> u8 {
+    let c = v.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * libm::powf(c, 1.0 / 2.4) - 0.055
+    };
+    libm::roundf(s * 255.0).clamp(0.0, 255.0) as u8
+}
+
+fn det3(m: &[[f32; 3]; 3]) -> f32 {
+    m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1])
+        - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0])
+}
+
+/// Solves a x = b with Cramer's rule, None if a is singular
+fn solve3(a: [[f32; 3]; 3], b: [f32; 3]) -> Option<[f32; 3]> {
+    let d = det3(&a);
+    if libm::fabsf(d) < 1e-9 {
+        return None;
+    }
+    Some([0, 1, 2].map(|col| {
+        let mut m = a;
+        for (row, value) in m.iter_mut().zip(b) {
+            row[col] = value;
+        }
+        det3(&m) / d
+    }))
 }

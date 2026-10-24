@@ -84,6 +84,9 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 			const message =
 				"IP and port must either both be set or both be empty";
 			port.setCustomValidity(message);
+		} else if (!portSet) {
+			// Spoolman isn't used, both fields are allowed to stay empty
+			port.setCustomValidity("");
 		} else {
 			port.setCustomValidity(
 				/^(?:\d{2,}).?$/.test(port.value) ? "" : "Not matching format",
@@ -156,7 +159,7 @@ export function SettingsPage({ setPage }: { setPage: (page: Pages) => void }) {
 
 				{/* LED brightness */}
 				<div class="flex flex-col mx-auto lg:w-2/3 w-full">
-					<label htmlFor="led">LED Brightness (%)</label>
+					<label htmlFor="led">Status LED Brightness (%)</label>
 					<input
 						type="number"
 						min={0}
