@@ -99,6 +99,7 @@ embassy-sync = { version = "*", features = ["defmt"] }
 embassy-futures = { version = "*", features = ["defmt"] }
 
 micromath = { version = "*" }
+libm = { version = "0.2" }
 
 postcard = { version = "1.1" }
 

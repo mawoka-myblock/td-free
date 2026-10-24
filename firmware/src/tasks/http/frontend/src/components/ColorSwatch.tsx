@@ -35,7 +35,7 @@ export function ColorSwatch({ hex }: ColorSwatchProps) {
 				}}
 			/>
 			<span
-				class="font-mono p-1.5 m-auto rounded-lg text-sm border-solid border-2 border-gray-400"
+				class="font-mono p-1.5 m-auto rounded-lg text-sm text-white border-solid border-2 border-gray-400"
 			>
 				{copied ? "Copied!" : hex.toUpperCase()}
 			</span>

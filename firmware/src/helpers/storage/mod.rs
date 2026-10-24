@@ -4,7 +4,7 @@ use defmt::Format;
 pub use implementation::{NvsOpError, NvsStored};
 use serde::{Deserialize, Serialize};
 
-use crate::helpers::RGBMultipliers;
+use crate::helpers::{RGBMultipliers, calibration::ColorReferences};
 
 #[derive(Debug, Clone, Format, Serialize, Deserialize)]
 pub struct WifiCreds {
@@ -59,4 +59,8 @@ impl NvsStored for Settings {
 
 impl NvsStored for RGBMultipliers {
     const KEY: &'static [u8] = b"RGB";
+}
+
+impl NvsStored for ColorReferences {
+    const KEY: &'static [u8] = b"CREF";
 }
